@@ -330,6 +330,11 @@ def parse_cell_content(cell_text: str) -> Optional[dict]:
 
     # Only return if we found a child (team we care about)
     if child:
+        loc_code = location_info["code"] if location_info else "TBD"
+        time_display = time_str or "TBD"
+        # Title format: "Liza @MICC 5:00 - 6:00 pm"
+        title = f"{child} @{loc_code} {time_display}"
+
         return {
             "child": child,
             "team": team or "",
@@ -337,8 +342,8 @@ def parse_cell_content(cell_text: str) -> Optional[dict]:
             "location_code": location_info["code"] if location_info else "",
             "location_name": location_info["name"] if location_info else "",
             "location_address": location_info["address"] if location_info else "",
-            "title": f"{child} Swimming Practice",
-            "display": f"{child} @{location_info['code'] if location_info else 'TBD'} {time_str or 'TBD'}",
+            "title": title,
+            "display": title,
             "date": "",
             "raw": cell_text
         }
@@ -386,6 +391,11 @@ def parse_swim_schedule_text(text: str) -> list:
                         location_code = code
                         break
 
+                # Title format: "Liza @MICC 5:00 - 6:00 pm"
+                loc_code = location_code or "TBD"
+                time_display = time_str or "TBD"
+                title = f"{child} @{loc_code} {time_display}"
+
                 events.append({
                     "child": child,
                     "team": team_pattern,
@@ -393,8 +403,8 @@ def parse_swim_schedule_text(text: str) -> list:
                     "location_code": location_code,
                     "location_name": location_info["name"] if location_info else "",
                     "location_address": location_info["address"] if location_info else "",
-                    "title": f"{child} Swimming Practice",
-                    "display": f"{child} @{location_code or 'TBD'} {time_str or 'TBD'}",
+                    "title": title,
+                    "display": title,
                     "date": current_date or "",
                     "raw": line
                 })

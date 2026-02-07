@@ -101,26 +101,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Group events by child for better display
+        // Display events with format: "Child @Location Time" as title
         eventsList.innerHTML = events.map((event, index) => {
             const childName = event.child || 'Unknown';
-            const locationCode = event.location_code ? `@${event.location_code}` : '@TBD';
+            const locationCode = event.location_code || 'TBD';
             const timeStr = event.time || 'TBD';
             const locationFull = event.location_name && event.location_address
                 ? `${event.location_name}, ${event.location_address}`
                 : event.location_name || '';
 
+            // Title format: "Liza @MICC 5:00 - 6:00 pm"
+            const eventTitle = `${childName} @${locationCode} ${timeStr}`;
+
             return `
             <div class="event-item" data-child="${escapeHtml(childName)}">
                 <input type="checkbox" id="event-${index}" checked data-index="${index}">
                 <div class="event-details">
-                    <div class="event-title">
-                        <span class="child-name">${escapeHtml(childName)}</span>
-                        <span class="location-code">${escapeHtml(locationCode)}</span>
-                        <span class="event-time">${escapeHtml(timeStr)}</span>
+                    <div class="event-title">${escapeHtml(eventTitle)}</div>
+                    <div class="event-info">
+                        ${event.date ? `<div class="event-date"><strong>Date:</strong> ${escapeHtml(event.date)}</div>` : ''}
+                        ${timeStr ? `<div class="event-time-detail"><strong>Time:</strong> ${escapeHtml(timeStr)}</div>` : ''}
+                        ${locationFull ? `<div class="event-location"><strong>Location:</strong> ${escapeHtml(locationFull)}</div>` : ''}
                     </div>
-                    ${event.date ? `<div class="event-date">${escapeHtml(event.date)}</div>` : ''}
-                    ${locationFull ? `<div class="event-location">${escapeHtml(locationFull)}</div>` : ''}
                 </div>
             </div>
         `}).join('');
