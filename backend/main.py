@@ -156,56 +156,110 @@ async def parse_pdf(file: UploadFile = File(...)):
             temp_path.unlink()
 
 
+def normalize_text(text: str) -> str:
+    """
+    Clean up text that may have spacing issues from PDF extraction.
+    Removes extra spaces between characters while preserving word boundaries.
+    """
+    if not text:
+        return ""
+    # Remove spaces between single characters (e.g., "J U N 2" -> "JUN2")
+    # But preserve normal word spacing
+    cleaned = re.sub(r'(?<=[A-Za-z0-9])\s+(?=[A-Za-z0-9])', '', text)
+    # Also handle common patterns
+    cleaned = re.sub(r'\s+', ' ', cleaned)  # Multiple spaces to single
+    return cleaned.strip()
+
+
 def extract_schedule_from_pdf(pdf_path: Path) -> list:
     """
     Extract schedule events from a swimming practice PDF.
-
-    Parses for specific teams (JUN2, JUN1 B, JUN1 R) and maps them to children.
-    Format: Team first, Time second, Place third.
+    Only extracts events for JUN2 (Nastya), JUN1 B (Kseniya), JUN1 R (Liza).
     """
     events = []
 
     with pdfplumber.open(pdf_path) as pdf:
-        all_text = ""
         all_tables = []
 
         for page in pdf.pages:
-            # Try to extract tables
+            # Extract tables from each page
             tables = page.extract_tables()
             if tables:
                 all_tables.extend(tables)
 
-            # Also extract raw text
-            text = page.extract_text()
-            if text:
-                all_text += text + "\n"
-
-        # First, try to parse structured tables for swim schedule
+        # Parse the schedule tables
         if all_tables:
             events = parse_swim_schedule_tables(all_tables)
-
-        # If no events found from tables, try text parsing
-        if not events:
-            events = parse_swim_schedule_text(all_text)
 
     return events
 
 
-def get_child_for_team(team_str: str) -> Optional[str]:
-    """Match a team string to a child's name."""
-    team_upper = team_str.upper().strip()
-    for team_pattern, child in TEAM_TO_CHILD.items():
-        if team_pattern.upper() in team_upper or team_upper in team_pattern.upper():
-            return child
+def find_team_in_text(text: str) -> Optional[tuple]:
+    """
+    Find which team (and child) is mentioned in the text.
+    Returns (child_name, team_pattern) or None.
+    """
+    if not text:
+        return None
+
+    text_upper = text.upper()
+    text_normalized = normalize_text(text_upper)
+
+    # Check for each team pattern
+    # JUN2 -> Nastya
+    if "JUN2" in text_normalized or "JUN 2" in text_upper or "JUNIOR 2" in text_upper:
+        # Make sure it's not JUN1
+        if "JUN1" not in text_normalized:
+            return ("Nastya", "JUN2")
+
+    # JUN1 B / JUN1B -> Kseniya (Junior 1 Black)
+    if ("JUN1" in text_normalized or "JUN 1" in text_upper) and ("B" in text_upper or "BLACK" in text_upper):
+        if "R" not in text_upper.replace("JUNIOR", "").replace("JR", "") or "BLACK" in text_upper:
+            return ("Kseniya", "JUN1 B")
+
+    # JUN1 R / JUN1R -> Liza (Junior 1 Red)
+    if ("JUN1" in text_normalized or "JUN 1" in text_upper) and ("R" in text_upper or "RED" in text_upper):
+        if "B" not in text_upper.replace("JUNIOR", "").replace("JR", "") or "RED" in text_upper:
+            return ("Liza", "JUN1 R")
+
     return None
 
 
-def get_location_info(location_code: str) -> Optional[dict]:
-    """Get full location info from a location code."""
-    code_upper = location_code.upper().strip()
+def find_location_in_text(text: str) -> Optional[dict]:
+    """Find location code in text and return location info."""
+    if not text:
+        return None
+
+    text_upper = text.upper()
+    text_normalized = normalize_text(text_upper)
+
     for code, info in LOCATIONS.items():
-        if code in code_upper:
+        if code in text_normalized or code in text_upper:
             return {"code": code, **info}
+
+    return None
+
+
+def extract_time_from_text(text: str) -> Optional[str]:
+    """Extract time range from text."""
+    if not text:
+        return None
+
+    # Normalize the text first
+    normalized = normalize_text(text)
+
+    # Look for time patterns like "6:30-8PM" or "6:30 - 8:00 PM"
+    patterns = [
+        r'(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}(?::\d{2})?)\s*(AM|PM|am|pm)?',
+        r'(\d{1,2})\s*[-–—]\s*(\d{1,2}(?::\d{2})?)\s*(AM|PM|am|pm)',
+        r'(\d{1,2}:\d{2})\s*(AM|PM|am|pm)?',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, normalized, re.IGNORECASE)
+        if match:
+            return match.group(0).strip()
+
     return None
 
 
@@ -213,28 +267,41 @@ def parse_swim_schedule_tables(tables: list) -> list:
     """Parse swim schedule from extracted tables."""
     events = []
 
-    # Days of the week for header detection
-    days_of_week = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-                    "mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    # Days of the week patterns for detecting date headers
+    day_patterns = {
+        "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+        "thu": "Thursday", "fri": "Friday", "sat": "Saturday", "sun": "Sunday"
+    }
 
     for table in tables:
         if not table or len(table) < 2:
             continue
 
-        # Try to find header row with days
-        header_row_idx = 0
-        date_columns = {}  # Maps column index to date info
+        # Find the header row with days/dates
+        header_row_idx = -1
+        date_columns = {}  # Maps column index to date string
 
         for row_idx, row in enumerate(table):
             if not row:
                 continue
+
+            found_days = 0
             for col_idx, cell in enumerate(row):
                 if cell:
-                    cell_lower = str(cell).lower().strip()
-                    # Check if this looks like a day/date header
-                    if any(day in cell_lower for day in days_of_week):
-                        header_row_idx = row_idx
-                        date_columns[col_idx] = str(cell).strip()
+                    cell_str = str(cell).strip().lower()
+                    for day_abbr, day_full in day_patterns.items():
+                        if day_abbr in cell_str:
+                            date_columns[col_idx] = str(cell).strip()
+                            found_days += 1
+                            break
+
+            # If we found multiple days in this row, it's the header
+            if found_days >= 2:
+                header_row_idx = row_idx
+                break
+
+        if header_row_idx < 0:
+            continue
 
         # Parse data rows after header
         for row in table[header_row_idx + 1:]:
@@ -246,169 +313,48 @@ def parse_swim_schedule_tables(tables: list) -> list:
                     continue
 
                 cell_str = str(cell).strip()
+                cell_normalized = normalize_text(cell_str)
 
-                # Skip if it's "OFF" - no practice
-                if cell_str.upper() == "OFF":
+                # Skip empty or OFF cells
+                if not cell_str or cell_normalized.upper() == "OFF" or cell_str.upper() == "OFF":
                     continue
 
-                # Try to parse cell content: Team, Time, Place
-                parsed = parse_cell_content(cell_str)
-                if parsed and parsed.get("child"):
-                    # Add date from column header if available
-                    if col_idx in date_columns:
-                        parsed["date"] = date_columns[col_idx]
-                    events.append(parsed)
+                # Check if this cell contains a team we care about
+                team_info = find_team_in_text(cell_str)
+                if not team_info:
+                    continue
 
-    return events
+                child_name, team_name = team_info
 
+                # Extract location
+                location_info = find_location_in_text(cell_str)
+                location_code = location_info["code"] if location_info else ""
+                location_name = location_info["name"] if location_info else ""
+                location_address = location_info["address"] if location_info else ""
 
-def parse_cell_content(cell_text: str) -> Optional[dict]:
-    """
-    Parse a cell containing: Team, Time, Place
-    Returns formatted event or None.
-    """
-    if not cell_text or cell_text.upper() == "OFF":
-        return None
+                # Extract time
+                time_str = extract_time_from_text(cell_str)
+                if not time_str:
+                    time_str = ""
 
-    lines = cell_text.strip().split("\n")
+                # Get date from column header
+                date_str = date_columns.get(col_idx, "")
 
-    # Try to extract team, time, place from lines or from single line
-    team = None
-    time_str = None
-    place = None
-    child = None
-    location_info = None
-
-    # Time pattern
-    time_pattern = r"(\d{1,2}:\d{2})\s*[-–—]?\s*(\d{1,2}:\d{2})?\s*(AM|PM|am|pm)?"
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Check if line contains a team we care about
-        child_match = get_child_for_team(line)
-        if child_match:
-            team = line
-            child = child_match
-            continue
-
-        # Check if line contains time
-        time_match = re.search(time_pattern, line, re.IGNORECASE)
-        if time_match:
-            time_str = line
-            continue
-
-        # Check if line contains a location
-        loc_info = get_location_info(line)
-        if loc_info:
-            place = line
-            location_info = loc_info
-            continue
-
-    # If we couldn't parse from lines, try parsing whole cell
-    if not child:
-        # Check each known team pattern against the whole cell
-        for team_pattern, child_name in TEAM_TO_CHILD.items():
-            if team_pattern.upper() in cell_text.upper():
-                child = child_name
-                team = team_pattern
-                break
-
-    if not time_str:
-        time_match = re.search(time_pattern, cell_text, re.IGNORECASE)
-        if time_match:
-            time_str = time_match.group(0)
-
-    if not location_info:
-        for code in LOCATIONS.keys():
-            if code in cell_text.upper():
-                location_info = get_location_info(code)
-                place = code
-                break
-
-    # Only return if we found a child (team we care about)
-    if child:
-        loc_code = location_info["code"] if location_info else "TBD"
-        time_display = time_str or "TBD"
-        # Title format: "Liza @MICC 5:00 - 6:00 pm"
-        title = f"{child} @{loc_code} {time_display}"
-
-        return {
-            "child": child,
-            "team": team or "",
-            "time": time_str or "",
-            "location_code": location_info["code"] if location_info else "",
-            "location_name": location_info["name"] if location_info else "",
-            "location_address": location_info["address"] if location_info else "",
-            "title": title,
-            "display": title,
-            "date": "",
-            "raw": cell_text
-        }
-
-    return None
-
-
-def parse_swim_schedule_text(text: str) -> list:
-    """Parse swim schedule from raw text."""
-    events = []
-
-    lines = text.split("\n")
-    current_date = None
-
-    # Date patterns
-    date_pattern = r"((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?\s*,?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})"
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Check for date
-        date_match = re.search(date_pattern, line, re.IGNORECASE)
-        if date_match:
-            current_date = date_match.group(1)
-
-        # Skip OFF days
-        if "OFF" in line.upper() and len(line) < 20:
-            continue
-
-        # Check if line contains a team we care about
-        for team_pattern, child in TEAM_TO_CHILD.items():
-            if team_pattern.upper() in line.upper():
-                # Found a relevant team, parse the line
-                time_match = re.search(r"(\d{1,2}:\d{2}\s*[-–—]?\s*\d{0,2}:?\d{0,2}\s*(?:AM|PM|am|pm)?)", line, re.IGNORECASE)
-                time_str = time_match.group(1) if time_match else ""
-
-                # Find location
-                location_info = None
-                location_code = ""
-                for code in LOCATIONS.keys():
-                    if code in line.upper():
-                        location_info = LOCATIONS[code]
-                        location_code = code
-                        break
-
-                # Title format: "Liza @MICC 5:00 - 6:00 pm"
-                loc_code = location_code or "TBD"
-                time_display = time_str or "TBD"
-                title = f"{child} @{loc_code} {time_display}"
+                # Build the title: "Liza @MICC 5:00 - 6:00 pm"
+                loc_display = f"@{location_code}" if location_code else "@TBD"
+                time_display = time_str if time_str else "TBD"
+                title = f"{child_name} {loc_display} {time_display}"
 
                 events.append({
-                    "child": child,
-                    "team": team_pattern,
+                    "child": child_name,
+                    "team": team_name,
                     "time": time_str,
+                    "date": date_str,
                     "location_code": location_code,
-                    "location_name": location_info["name"] if location_info else "",
-                    "location_address": location_info["address"] if location_info else "",
+                    "location_name": location_name,
+                    "location_address": location_address,
                     "title": title,
-                    "display": title,
-                    "date": current_date or "",
-                    "raw": line
                 })
-                break
 
     return events
 

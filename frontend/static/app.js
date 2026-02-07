@@ -101,17 +101,18 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Display events with format: "Child @Location Time" as title
+        // Display only events for our kids with proper format
         eventsList.innerHTML = events.map((event, index) => {
-            const childName = event.child || 'Unknown';
+            const childName = event.child || '';
             const locationCode = event.location_code || 'TBD';
             const timeStr = event.time || 'TBD';
+            const dateStr = event.date || 'TBD';
             const locationFull = event.location_name && event.location_address
                 ? `${event.location_name}, ${event.location_address}`
                 : event.location_name || '';
 
             // Title format: "Liza @MICC 5:00 - 6:00 pm"
-            const eventTitle = `${childName} @${locationCode} ${timeStr}`;
+            const eventTitle = event.title || `${childName} @${locationCode} ${timeStr}`;
 
             return `
             <div class="event-item" data-child="${escapeHtml(childName)}">
@@ -119,8 +120,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="event-details">
                     <div class="event-title">${escapeHtml(eventTitle)}</div>
                     <div class="event-info">
-                        ${event.date ? `<div class="event-date"><strong>Date:</strong> ${escapeHtml(event.date)}</div>` : ''}
-                        ${timeStr ? `<div class="event-time-detail"><strong>Time:</strong> ${escapeHtml(timeStr)}</div>` : ''}
+                        <div class="event-date"><strong>Date:</strong> ${escapeHtml(dateStr)}</div>
+                        <div class="event-time-detail"><strong>Time:</strong> ${escapeHtml(timeStr)}</div>
                         ${locationFull ? `<div class="event-location"><strong>Location:</strong> ${escapeHtml(locationFull)}</div>` : ''}
                     </div>
                 </div>
