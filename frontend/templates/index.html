@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swim Schedule App</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Swim Schedule App</h1>
+            <p class="subtitle">Upload a swimming practice schedule PDF and send calendar invites</p>
+        </header>
+
+        <div class="auth-section">
+            {% if is_authenticated %}
+                <div class="auth-status authenticated">
+                    <span class="status-icon">&#10003;</span>
+                    Connected to Outlook
+                    <a href="/auth/logout" class="btn btn-small btn-secondary">Logout</a>
+                </div>
+            {% else %}
+                <div class="auth-status not-authenticated">
+                    <span class="status-icon">!</span>
+                    Not connected to Outlook
+                    <a href="/auth/login" class="btn btn-small btn-primary">Connect to Outlook</a>
+                </div>
+            {% endif %}
+        </div>
+
+        <main>
+            <section class="upload-section">
+                <h2>Step 1: Upload Schedule PDF</h2>
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="pdfInput" accept=".pdf" hidden>
+                    <div class="upload-content">
+                        <div class="upload-icon">&#128196;</div>
+                        <p>Drag & drop a PDF file here or <span class="link">browse</span></p>
+                        <p class="file-name" id="fileName"></p>
+                    </div>
+                </div>
+                <button class="btn btn-primary" id="parseBtn" disabled>Parse Schedule</button>
+            </section>
+
+            <section class="events-section" id="eventsSection" style="display: none;">
+                <h2>Step 2: Review Parsed Events</h2>
+                <div class="events-list" id="eventsList"></div>
+                <div class="events-actions">
+                    <button class="btn btn-secondary" id="selectAllBtn">Select All</button>
+                    <button class="btn btn-secondary" id="deselectAllBtn">Deselect All</button>
+                </div>
+            </section>
+
+            <section class="attendees-section" id="attendeesSection" style="display: none;">
+                <h2>Step 3: Add Attendees</h2>
+                <div class="attendees-input">
+                    <input type="email" id="attendeeEmail" placeholder="Enter email address">
+                    <button class="btn btn-secondary" id="addAttendeeBtn">Add</button>
+                </div>
+                <div class="attendees-list" id="attendeesList"></div>
+            </section>
+
+            <section class="send-section" id="sendSection" style="display: none;">
+                <h2>Step 4: Send Invites</h2>
+                <button class="btn btn-primary btn-large" id="sendBtn" {% if not is_authenticated %}disabled{% endif %}>
+                    Send Calendar Invites
+                </button>
+                {% if not is_authenticated %}
+                    <p class="warning">Please connect to Outlook first to send invites</p>
+                {% endif %}
+            </section>
+
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <h2>Results</h2>
+                <div class="results-list" id="resultsList"></div>
+            </section>
+        </main>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="spinner"></div>
+        <p id="loadingText">Processing...</p>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
