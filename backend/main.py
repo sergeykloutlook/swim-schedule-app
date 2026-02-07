@@ -289,12 +289,34 @@ def parse_swim_schedule_tables(tables: list) -> list:
     """Parse swim schedule from extracted tables."""
     events = []
 
-    # Map column indices to dates based on the date row
-    # The PDF has dates in rows like: ['29', 'NO MW', '30', 'NO MW', ...]
+    # Month names for parsing
+    MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+              "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"]
+    MONTH_ABBREV = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
     for table in tables:
         if not table or len(table) < 3:
             continue
+
+        # Extract the calendar month from the title (Row 0)
+        calendar_month = None
+        calendar_year = None
+        if table[0] and table[0][0]:
+            title = str(table[0][0]).upper()
+            for i, month in enumerate(MONTHS):
+                if month in title:
+                    calendar_month = i + 1  # 1-12
+                    break
+            # Extract year
+            year_match = re.search(r'20\d{2}', title)
+            if year_match:
+                calendar_year = int(year_match.group())
+
+        if not calendar_month:
+            calendar_month = 1  # Default to January
+        if not calendar_year:
+            calendar_year = 2026
 
         # Find the row with day names (header row)
         header_row_idx = -1
@@ -308,30 +330,57 @@ def parse_swim_schedule_tables(tables: list) -> list:
         if header_row_idx < 0:
             continue
 
-        # Find date row (the row with numbers like 29, 30, 31, 1, 2, 3, 4)
-        date_row_idx = -1
-        date_columns = {}  # Maps column index to date info
+        # Collect ALL date rows and their dates
+        # The calendar shows dates in multiple rows (each row is a week)
+        all_date_info = {}  # Maps (row_idx, col_idx) to date string
 
-        for row_idx in range(header_row_idx + 1, min(header_row_idx + 3, len(table))):
+        for row_idx in range(header_row_idx + 1, len(table)):
             row = table[row_idx]
             if not row:
                 continue
 
-            # Check if this row has date numbers
-            date_count = 0
+            # Check if this row has date numbers (even rows typically have dates)
+            dates_in_row = []
             for col_idx, cell in enumerate(row):
                 if cell:
                     cell_str = str(cell).strip()
-                    # Check if it's a date number (1-31)
                     if re.match(r'^\d{1,2}$', cell_str):
                         date_num = int(cell_str)
                         if 1 <= date_num <= 31:
-                            date_columns[col_idx] = f"Jan {date_num}"
-                            date_count += 1
+                            dates_in_row.append((col_idx, date_num))
 
-            if date_count >= 3:
-                date_row_idx = row_idx
-                break
+            if len(dates_in_row) >= 3:
+                # This is a date row - figure out which month each date belongs to
+                # Calendar shows previous month dates at start (high numbers like 26-31)
+                # then current month dates (1, 2, 3...)
+
+                prev_month = calendar_month - 1 if calendar_month > 1 else 12
+                prev_year = calendar_year if calendar_month > 1 else calendar_year - 1
+
+                # Check if this row has a mix of high and low dates (month transition)
+                # or just current month dates
+                has_low_dates = any(d[1] < 10 for d in dates_in_row)
+                has_high_dates = any(d[1] > 20 for d in dates_in_row)
+
+                for col_idx, date_num in dates_in_row:
+                    # If we have both high and low dates in same row, high ones are prev month
+                    # If row has high dates (26-31) but no low dates, and it's first data rows, prev month
+                    if date_num > 20 and has_low_dates:
+                        # This high date is before the month transition
+                        month_abbrev = MONTH_ABBREV[prev_month - 1]
+                        date_str = f"{month_abbrev} {date_num}, {prev_year}"
+                    elif date_num > 20 and not has_low_dates and row_idx <= header_row_idx + 2:
+                        # First week with all high dates = previous month
+                        month_abbrev = MONTH_ABBREV[prev_month - 1]
+                        date_str = f"{month_abbrev} {date_num}, {prev_year}"
+                    else:
+                        # Current calendar month
+                        month_abbrev = MONTH_ABBREV[calendar_month - 1]
+                        date_str = f"{month_abbrev} {date_num}, {calendar_year}"
+
+                    # Store for both this row and the next row (data row)
+                    all_date_info[(row_idx, col_idx)] = date_str
+                    all_date_info[(row_idx + 1, col_idx)] = date_str
 
         # Parse data rows (cells with team schedules)
         for row_idx in range(header_row_idx + 1, len(table)):
@@ -347,6 +396,10 @@ def parse_swim_schedule_tables(tables: list) -> list:
                 if not cell_str:
                     continue
 
+                # Skip if this is just a date number
+                if re.match(r'^\d{1,2}$', cell_str):
+                    continue
+
                 # Each cell may contain multiple team schedules separated by newlines
                 lines = cell_str.split('\n')
 
@@ -358,8 +411,11 @@ def parse_swim_schedule_tables(tables: list) -> list:
                     # Parse this line
                     parsed = parse_schedule_line(line)
                     if parsed:
-                        # Add date from the date row
-                        date_str = date_columns.get(col_idx, "")
+                        # Add date - check current row and nearby columns
+                        date_str = all_date_info.get((row_idx, col_idx), "")
+                        if not date_str:
+                            # Try the row above (date row)
+                            date_str = all_date_info.get((row_idx - 1, col_idx), "")
                         parsed["date"] = date_str
                         events.append(parsed)
 
