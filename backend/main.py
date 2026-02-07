@@ -23,6 +23,41 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "frontend" / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "frontend" / "templates")
 
+# Team to child mapping
+TEAM_TO_CHILD = {
+    "JUN2": "Nastya",
+    "JUN 2": "Nastya",
+    "JUNIOR 2": "Nastya",
+    "JUN1 B": "Kseniya",
+    "JUN1B": "Kseniya",
+    "JUN 1 B": "Kseniya",
+    "JUNIOR 1 BLACK": "Kseniya",
+    "JUN1 R": "Liza",
+    "JUN1R": "Liza",
+    "JUN 1 R": "Liza",
+    "JUNIOR 1 RED": "Liza",
+}
+
+# Location code to full address mapping
+LOCATIONS = {
+    "MICC": {
+        "name": "Mercer Island Country Club",
+        "address": "8700 SE 71st St, Mercer Island, WA 98040"
+    },
+    "MW": {
+        "name": "Mary Wayte Swimming Pool",
+        "address": "8815 SE 40th St, Mercer Island, WA 98040"
+    },
+    "MIBC": {
+        "name": "Mercer Island Beach Club",
+        "address": "8326 Avalon Dr, Mercer Island, WA 98040"
+    },
+    "PL": {
+        "name": "Phantom Lake Bath & Tennis Club",
+        "address": "15810 SE 24th St, Bellevue, WA 98008"
+    },
+}
+
 # Microsoft Graph API configuration
 CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
@@ -125,8 +160,8 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
     """
     Extract schedule events from a swimming practice PDF.
 
-    Attempts to parse tables first, then falls back to text extraction
-    with pattern matching for dates, times, and activities.
+    Parses for specific teams (JUN2, JUN1 B, JUN1 R) and maps them to children.
+    Format: Team first, Time second, Place third.
     """
     events = []
 
@@ -145,134 +180,222 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
             if text:
                 all_text += text + "\n"
 
-        # First, try to parse structured tables
+        # First, try to parse structured tables for swim schedule
         if all_tables:
-            events = parse_tables(all_tables)
+            events = parse_swim_schedule_tables(all_tables)
 
         # If no events found from tables, try text parsing
         if not events:
-            events = parse_text(all_text)
+            events = parse_swim_schedule_text(all_text)
 
     return events
 
 
-def parse_tables(tables: list) -> list:
-    """Parse schedule from extracted tables."""
+def get_child_for_team(team_str: str) -> Optional[str]:
+    """Match a team string to a child's name."""
+    team_upper = team_str.upper().strip()
+    for team_pattern, child in TEAM_TO_CHILD.items():
+        if team_pattern.upper() in team_upper or team_upper in team_pattern.upper():
+            return child
+    return None
+
+
+def get_location_info(location_code: str) -> Optional[dict]:
+    """Get full location info from a location code."""
+    code_upper = location_code.upper().strip()
+    for code, info in LOCATIONS.items():
+        if code in code_upper:
+            return {"code": code, **info}
+    return None
+
+
+def parse_swim_schedule_tables(tables: list) -> list:
+    """Parse swim schedule from extracted tables."""
     events = []
 
-    # Common header patterns
-    date_headers = ["date", "day", "mon", "tue", "wed", "thu", "fri", "sat", "sun", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    time_headers = ["time", "start", "end", "hours", "am", "pm"]
+    # Days of the week for header detection
+    days_of_week = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                    "mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
     for table in tables:
         if not table or len(table) < 2:
             continue
 
-        # Try to identify header row
-        header_row = table[0] if table[0] else []
-        header_row = [str(h).lower().strip() if h else "" for h in header_row]
+        # Try to find header row with days
+        header_row_idx = 0
+        date_columns = {}  # Maps column index to date info
 
-        # Find column indices
-        date_col = None
-        time_col = None
-        activity_col = None
+        for row_idx, row in enumerate(table):
+            if not row:
+                continue
+            for col_idx, cell in enumerate(row):
+                if cell:
+                    cell_lower = str(cell).lower().strip()
+                    # Check if this looks like a day/date header
+                    if any(day in cell_lower for day in days_of_week):
+                        header_row_idx = row_idx
+                        date_columns[col_idx] = str(cell).strip()
 
-        for i, header in enumerate(header_row):
-            if any(dh in header for dh in date_headers):
-                date_col = i
-            elif any(th in header for th in time_headers):
-                time_col = i
-            elif header and date_col is not None:
-                activity_col = i
-
-        # Parse data rows
-        for row in table[1:]:
+        # Parse data rows after header
+        for row in table[header_row_idx + 1:]:
             if not row:
                 continue
 
-            event = extract_event_from_row(row, date_col, time_col, activity_col)
-            if event:
-                events.append(event)
+            for col_idx, cell in enumerate(row):
+                if not cell:
+                    continue
+
+                cell_str = str(cell).strip()
+
+                # Skip if it's "OFF" - no practice
+                if cell_str.upper() == "OFF":
+                    continue
+
+                # Try to parse cell content: Team, Time, Place
+                parsed = parse_cell_content(cell_str)
+                if parsed and parsed.get("child"):
+                    # Add date from column header if available
+                    if col_idx in date_columns:
+                        parsed["date"] = date_columns[col_idx]
+                    events.append(parsed)
 
     return events
 
 
-def extract_event_from_row(row: list, date_col: int, time_col: int, activity_col: int) -> Optional[dict]:
-    """Extract a single event from a table row."""
-    try:
-        date_str = str(row[date_col]) if date_col is not None and date_col < len(row) else ""
-        time_str = str(row[time_col]) if time_col is not None and time_col < len(row) else ""
-        activity = str(row[activity_col]) if activity_col is not None and activity_col < len(row) else ""
+def parse_cell_content(cell_text: str) -> Optional[dict]:
+    """
+    Parse a cell containing: Team, Time, Place
+    Returns formatted event or None.
+    """
+    if not cell_text or cell_text.upper() == "OFF":
+        return None
 
-        if not activity:
-            # Try to get activity from any non-empty cell
-            for i, cell in enumerate(row):
-                if cell and i not in [date_col, time_col]:
-                    activity = str(cell)
-                    break
+    lines = cell_text.strip().split("\n")
 
-        if date_str or time_str:
-            return {
-                "title": activity or "Swimming Practice",
-                "date": date_str,
-                "time": time_str,
-                "raw": " | ".join(str(c) for c in row if c)
-            }
-    except (IndexError, TypeError):
-        pass
+    # Try to extract team, time, place from lines or from single line
+    team = None
+    time_str = None
+    place = None
+    child = None
+    location_info = None
 
-    return None
-
-
-def parse_text(text: str) -> list:
-    """Parse schedule from raw text using pattern matching."""
-    events = []
-
-    # Date patterns
-    date_patterns = [
-        r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",  # MM/DD/YYYY or MM-DD-YYYY
-        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{0,4})",  # Month DD, YYYY
-        r"((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})",  # Day, Month DD
-    ]
-
-    # Time patterns
-    time_patterns = [
-        r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\s*[-–—to]+\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)",  # Time range
-        r"(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)",  # Single time
-    ]
-
-    lines = text.split("\n")
-    current_date = None
+    # Time pattern
+    time_pattern = r"(\d{1,2}:\d{2})\s*[-–—]?\s*(\d{1,2}:\d{2})?\s*(AM|PM|am|pm)?"
 
     for line in lines:
         line = line.strip()
         if not line:
             continue
 
-        # Check for date in line
-        for pattern in date_patterns:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                current_date = match.group(1)
+        # Check if line contains a team we care about
+        child_match = get_child_for_team(line)
+        if child_match:
+            team = line
+            child = child_match
+            continue
+
+        # Check if line contains time
+        time_match = re.search(time_pattern, line, re.IGNORECASE)
+        if time_match:
+            time_str = line
+            continue
+
+        # Check if line contains a location
+        loc_info = get_location_info(line)
+        if loc_info:
+            place = line
+            location_info = loc_info
+            continue
+
+    # If we couldn't parse from lines, try parsing whole cell
+    if not child:
+        # Check each known team pattern against the whole cell
+        for team_pattern, child_name in TEAM_TO_CHILD.items():
+            if team_pattern.upper() in cell_text.upper():
+                child = child_name
+                team = team_pattern
                 break
 
-        # Check for time in line
-        for pattern in time_patterns:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                time_str = match.group(0)
+    if not time_str:
+        time_match = re.search(time_pattern, cell_text, re.IGNORECASE)
+        if time_match:
+            time_str = time_match.group(0)
 
-                # Extract activity (text before or after the time)
-                activity = re.sub(pattern, "", line, flags=re.IGNORECASE).strip()
-                activity = re.sub(r"^\W+|\W+$", "", activity)  # Clean up
+    if not location_info:
+        for code in LOCATIONS.keys():
+            if code in cell_text.upper():
+                location_info = get_location_info(code)
+                place = code
+                break
 
-                if not activity:
-                    activity = "Swimming Practice"
+    # Only return if we found a child (team we care about)
+    if child:
+        return {
+            "child": child,
+            "team": team or "",
+            "time": time_str or "",
+            "location_code": location_info["code"] if location_info else "",
+            "location_name": location_info["name"] if location_info else "",
+            "location_address": location_info["address"] if location_info else "",
+            "title": f"{child} Swimming Practice",
+            "display": f"{child} @{location_info['code'] if location_info else 'TBD'} {time_str or 'TBD'}",
+            "date": "",
+            "raw": cell_text
+        }
+
+    return None
+
+
+def parse_swim_schedule_text(text: str) -> list:
+    """Parse swim schedule from raw text."""
+    events = []
+
+    lines = text.split("\n")
+    current_date = None
+
+    # Date patterns
+    date_pattern = r"((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?\s*,?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})"
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Check for date
+        date_match = re.search(date_pattern, line, re.IGNORECASE)
+        if date_match:
+            current_date = date_match.group(1)
+
+        # Skip OFF days
+        if "OFF" in line.upper() and len(line) < 20:
+            continue
+
+        # Check if line contains a team we care about
+        for team_pattern, child in TEAM_TO_CHILD.items():
+            if team_pattern.upper() in line.upper():
+                # Found a relevant team, parse the line
+                time_match = re.search(r"(\d{1,2}:\d{2}\s*[-–—]?\s*\d{0,2}:?\d{0,2}\s*(?:AM|PM|am|pm)?)", line, re.IGNORECASE)
+                time_str = time_match.group(1) if time_match else ""
+
+                # Find location
+                location_info = None
+                location_code = ""
+                for code in LOCATIONS.keys():
+                    if code in line.upper():
+                        location_info = LOCATIONS[code]
+                        location_code = code
+                        break
 
                 events.append({
-                    "title": activity,
-                    "date": current_date or "",
+                    "child": child,
+                    "team": team_pattern,
                     "time": time_str,
+                    "location_code": location_code,
+                    "location_name": location_info["name"] if location_info else "",
+                    "location_address": location_info["address"] if location_info else "",
+                    "title": f"{child} Swimming Practice",
+                    "display": f"{child} @{location_code or 'TBD'} {time_str or 'TBD'}",
+                    "date": current_date or "",
                     "raw": line
                 })
                 break
@@ -317,12 +440,20 @@ async def send_invites(request: Request):
                 })
                 continue
 
+            # Get location info
+            location_name = event.get("location_name", "")
+            location_address = event.get("location_address", "")
+            full_location = f"{location_name}, {location_address}" if location_name and location_address else location_name or location_address or ""
+
             # Create calendar event
             calendar_event = {
                 "subject": event["title"],
+                "location": {
+                    "displayName": full_location
+                },
                 "start": {
                     "dateTime": start_datetime.isoformat(),
-                    "timeZone": "America/Los_Angeles"  # Adjust as needed
+                    "timeZone": "America/Los_Angeles"
                 },
                 "end": {
                     "dateTime": end_datetime.isoformat(),
@@ -338,7 +469,7 @@ async def send_invites(request: Request):
                 "isOnlineMeeting": False,
                 "body": {
                     "contentType": "HTML",
-                    "content": f"<p>Swimming practice: {event['title']}</p><p>Automatically created by Swim Schedule App</p>"
+                    "content": f"<p>Swimming practice: {event['title']}</p><p>Location: {full_location}</p><p>Automatically created by Swim Schedule App</p>"
                 }
             }
 

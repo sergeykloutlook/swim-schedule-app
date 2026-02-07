@@ -212,6 +212,52 @@ section h2 {
     font-style: italic;
 }
 
+.child-name {
+    font-weight: 700;
+    color: #333;
+    margin-right: 8px;
+}
+
+.event-item[data-child="Nastya"] .child-name {
+    color: #e91e63;
+}
+
+.event-item[data-child="Kseniya"] .child-name {
+    color: #9c27b0;
+}
+
+.event-item[data-child="Liza"] .child-name {
+    color: #2196f3;
+}
+
+.location-code {
+    background: #e3f2fd;
+    color: #1565c0;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.event-time {
+    color: #666;
+    font-weight: 500;
+}
+
+.event-date {
+    color: #888;
+    font-size: 0.85rem;
+    margin-top: 4px;
+}
+
+.event-location {
+    color: #666;
+    font-size: 0.85rem;
+    margin-top: 4px;
+    font-style: italic;
+}
+
 .events-actions {
     display: flex;
     gap: 10px;

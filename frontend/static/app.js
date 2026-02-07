@@ -97,23 +97,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function displayEvents(events) {
         if (events.length === 0) {
-            eventsList.innerHTML = '<p style="color: #666; text-align: center;">No events found in the PDF. The schedule format may not be recognized.</p>';
+            eventsList.innerHTML = '<p style="color: #666; text-align: center;">No events found for Nastya (JUN2), Kseniya (JUN1 B), or Liza (JUN1 R) in the PDF.</p>';
             return;
         }
 
-        eventsList.innerHTML = events.map((event, index) => `
-            <div class="event-item">
+        // Group events by child for better display
+        eventsList.innerHTML = events.map((event, index) => {
+            const childName = event.child || 'Unknown';
+            const locationCode = event.location_code ? `@${event.location_code}` : '@TBD';
+            const timeStr = event.time || 'TBD';
+            const locationFull = event.location_name && event.location_address
+                ? `${event.location_name}, ${event.location_address}`
+                : event.location_name || '';
+
+            return `
+            <div class="event-item" data-child="${escapeHtml(childName)}">
                 <input type="checkbox" id="event-${index}" checked data-index="${index}">
                 <div class="event-details">
-                    <div class="event-title">${escapeHtml(event.title)}</div>
-                    <div class="event-datetime">
-                        ${event.date ? `Date: ${escapeHtml(event.date)}` : ''}
-                        ${event.time ? ` | Time: ${escapeHtml(event.time)}` : ''}
+                    <div class="event-title">
+                        <span class="child-name">${escapeHtml(childName)}</span>
+                        <span class="location-code">${escapeHtml(locationCode)}</span>
+                        <span class="event-time">${escapeHtml(timeStr)}</span>
                     </div>
-                    ${event.raw ? `<div class="event-raw">Raw: ${escapeHtml(event.raw)}</div>` : ''}
+                    ${event.date ? `<div class="event-date">${escapeHtml(event.date)}</div>` : ''}
+                    ${locationFull ? `<div class="event-location">${escapeHtml(locationFull)}</div>` : ''}
                 </div>
             </div>
-        `).join('');
+        `}).join('');
     }
 
     // Select/Deselect all
