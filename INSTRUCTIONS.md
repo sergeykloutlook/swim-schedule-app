@@ -28,22 +28,25 @@ When "OFF" appears in the calendar, it means no practice that day - skip it.
 
 ## Display Format
 
-When showing parsed events, use this format:
+When showing parsed events, the title should be:
 ```
 [Child Name] @[Location Code] [Time Range]
 ```
 
-Example:
+Example title:
 ```
-Nastya @MICC 5:30 - 6:45pm
-Kseniya @MW 4:00 - 5:15pm
-Liza @PL 3:30 - 4:30pm
+Liza @MICC 5:00 - 6:00 pm
 ```
+
+Below the title, show:
+- **Date:** The date of the practice
+- **Time:** The time range
+- **Location:** Full address of the pool/club
 
 ## Calendar Invite Details
 
 Each calendar invite should include:
-- **Title**: `[Child Name] Swimming Practice`
+- **Title/Subject**: `Liza @MICC 5:00 - 6:00 pm` (same as display format)
 - **Location**: Full address of the pool/club
 - **Time**: Parsed from the PDF schedule
 
