@@ -648,7 +648,14 @@ def parse_event_datetime(event: dict) -> tuple:
 
         end_hour = int(time_range_match.group(4))
         end_min = int(time_range_match.group(5) or 0)
-        end_ampm = time_range_match.group(6) or start_ampm
+        end_ampm = time_range_match.group(6)
+
+        # If only end has AM/PM (like "6-7:30PM"), apply it to both start and end
+        # Since all practices are < 2 hours, both times share the same AM/PM
+        if end_ampm and not start_ampm:
+            start_ampm = end_ampm
+        elif start_ampm and not end_ampm:
+            end_ampm = start_ampm
 
         # Adjust for AM/PM
         if start_ampm and start_ampm.upper() == "PM" and start_hour != 12:
