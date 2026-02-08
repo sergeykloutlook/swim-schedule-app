@@ -631,41 +631,39 @@ def parse_event_datetime(event: dict) -> tuple:
         # Default to today if no date found
         parsed_date = datetime.now().date()
 
-    # Parse time
+    # Parse time - format is like "6-7:30PM" or "11-12:30AM"
+    # AM/PM at end applies to BOTH start and end times (all practices < 2 hours)
     start_time = None
     end_time = None
 
-    # Look for time range
-    time_range_match = re.search(
-        r"(\d{1,2}):?(\d{2})?\s*(AM|PM|am|pm)?\s*[-–—to]+\s*(\d{1,2}):?(\d{2})?\s*(AM|PM|am|pm)?",
-        time_str
-    )
+    # Extract AM/PM from end of string first
+    time_upper = time_str.upper().strip()
+    ampm = None
+    if time_upper.endswith("PM"):
+        ampm = "PM"
+        time_upper = time_upper[:-2]
+    elif time_upper.endswith("AM"):
+        ampm = "AM"
+        time_upper = time_upper[:-2]
+
+    # Now parse the time range without AM/PM: "6-7:30" or "11-12:30"
+    time_range_match = re.match(r"(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?", time_upper)
 
     if time_range_match:
         start_hour = int(time_range_match.group(1))
         start_min = int(time_range_match.group(2) or 0)
-        start_ampm = time_range_match.group(3)
+        end_hour = int(time_range_match.group(3))
+        end_min = int(time_range_match.group(4) or 0)
 
-        end_hour = int(time_range_match.group(4))
-        end_min = int(time_range_match.group(5) or 0)
-        end_ampm = time_range_match.group(6)
-
-        # If only end has AM/PM (like "6-7:30PM"), apply it to both start and end
-        # Since all practices are < 2 hours, both times share the same AM/PM
-        if end_ampm and not start_ampm:
-            start_ampm = end_ampm
-        elif start_ampm and not end_ampm:
-            end_ampm = start_ampm
-
-        # Adjust for AM/PM
-        if start_ampm and start_ampm.upper() == "PM" and start_hour != 12:
+        # Apply AM/PM to both start and end
+        if ampm == "PM" and start_hour != 12:
             start_hour += 12
-        elif start_ampm and start_ampm.upper() == "AM" and start_hour == 12:
+        elif ampm == "AM" and start_hour == 12:
             start_hour = 0
 
-        if end_ampm and end_ampm.upper() == "PM" and end_hour != 12:
+        if ampm == "PM" and end_hour != 12:
             end_hour += 12
-        elif end_ampm and end_ampm.upper() == "AM" and end_hour == 12:
+        elif ampm == "AM" and end_hour == 12:
             end_hour = 0
 
         practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=start_hour, minute=start_min))
@@ -675,28 +673,9 @@ def parse_event_datetime(event: dict) -> tuple:
         start_time = practice_start - timedelta(minutes=45)
         end_time = practice_end + timedelta(minutes=30)
     else:
-        # Look for single time
-        single_time_match = re.search(r"(\d{1,2}):?(\d{2})?\s*(AM|PM|am|pm)?", time_str)
-        if single_time_match:
-            hour = int(single_time_match.group(1))
-            minute = int(single_time_match.group(2) or 0)
-            ampm = single_time_match.group(3)
-
-            if ampm and ampm.upper() == "PM" and hour != 12:
-                hour += 12
-            elif ampm and ampm.upper() == "AM" and hour == 12:
-                hour = 0
-
-            practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=hour, minute=minute))
-            practice_end = practice_start + timedelta(hours=1)  # Default 1 hour duration
-
-            # Add commute buffer: 45 min before start, 30 min after end
-            start_time = practice_start - timedelta(minutes=45)
-            end_time = practice_end + timedelta(minutes=30)
-        else:
-            # Default to 9 AM if no time found
-            start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=9))
-            end_time = start_time + timedelta(hours=1)
+        # Default to 9 AM - 10 AM if no time found
+        start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=9))
+        end_time = start_time + timedelta(hours=1)
 
     return start_time, end_time
 
