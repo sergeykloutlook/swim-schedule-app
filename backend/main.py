@@ -63,7 +63,7 @@ CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
 TENANT_ID = os.getenv("AZURE_TENANT_ID", "")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/auth/callback")
-SCOPES = ["Calendars.ReadWrite", "Mail.Send"]
+SCOPES = ["User.Read", "Calendars.ReadWrite", "Mail.Send"]
 
 # Store tokens in memory (use a database in production)
 token_cache = {}
@@ -71,9 +71,12 @@ token_cache = {}
 
 def get_msal_app():
     """Create MSAL confidential client application."""
+    # Use 'common' to support both personal and organizational accounts
+    # Use 'consumers' for personal accounts only, or TENANT_ID for org accounts only
+    authority = "https://login.microsoftonline.com/common"
     return msal.ConfidentialClientApplication(
         CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{TENANT_ID}",
+        authority=authority,
         client_credential=CLIENT_SECRET,
     )
 
@@ -185,6 +188,48 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
         if all_tables:
             events = parse_swim_schedule_tables(all_tables)
 
+    # Sort events by date and time
+    def sort_key(event):
+        date_str = event.get("date", "")
+        time_str = event.get("time", "")
+
+        # Parse date
+        try:
+            # Handle formats like "Feb 7, 2026" or "Jan 31, 2026"
+            parsed_date = datetime.strptime(date_str, "%b %d, %Y")
+        except:
+            parsed_date = datetime.max
+
+        # Parse start time from time string like "8-9:30AM" or "5:30-6:45PM" or "11-12:30PM"
+        start_hour = 0
+        start_min = 0
+        try:
+            # Match pattern like "11-12:30PM" or "5:30-6:45PM"
+            time_match = re.match(r'(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?([AP]M)?', time_str.upper())
+            if time_match:
+                start_hour = int(time_match.group(1))
+                start_min = int(time_match.group(2) or 0)
+                end_hour = int(time_match.group(3))
+                ampm = time_match.group(5) or ""
+
+                # Smart AM/PM detection:
+                # - "11-12:30PM" = 11 AM to 12:30 PM (morning practice ending at noon)
+                # - "5-6PM" = 5 PM to 6 PM (evening practice)
+                # If start hour >= 10 and end hour <= 12, it's morning (AM start)
+                if ampm == "PM":
+                    if start_hour >= 10 and start_hour <= 11 and end_hour >= 12:
+                        # Morning practice: 11 AM to 12:30 PM
+                        pass  # Keep start_hour as AM
+                    elif start_hour != 12:
+                        start_hour += 12
+                elif ampm == "AM" and start_hour == 12:
+                    start_hour = 0
+        except:
+            pass
+
+        return (parsed_date, start_hour, start_min)
+
+    events.sort(key=sort_key)
     return events
 
 
@@ -203,46 +248,37 @@ def parse_schedule_line(line: str) -> Optional[dict]:
     if "OFF" in original_upper:
         return None
 
-    # First, normalize the entire line by removing spaces within character sequences
-    # but preserving the structure
-    # "J U N 2 6 : 3 0 - 8 P M W" -> "JUN2 6:30-8PM MW"
+    # Step 1: Remove ALL spaces to get a fully normalized string
+    compact = re.sub(r'\s+', '', original_upper)
 
-    # Step 1: Fix spacing around colons and dashes for time
-    normalized = re.sub(r'(\d)\s*:\s*(\d)', r'\1:\2', original)  # "6 : 30" -> "6:30"
-    normalized = re.sub(r'(\d)\s*-\s*(\d)', r'\1-\2', normalized)  # "6 - 8" -> "6-8"
-
-    # Step 2: Fix letter spacing (but carefully preserve meaningful spaces)
-    # Remove spaces between consecutive single letters
-    normalized = re.sub(r'(?<=[A-Z])\s+(?=[A-Z](?:\s|$|[^A-Za-z]))', '', normalized.upper())
-    # Also handle patterns like "J U N 2" -> "JUN2"
-    normalized = re.sub(r'([A-Z])\s+([A-Z])\s+([A-Z])\s*(\d)', r'\1\2\3\4', normalized)
-
-    # Step 3: Clean up remaining issues
-    normalized = re.sub(r'\s+', ' ', normalized).strip()
-
-    # Determine which child/team
+    # Step 2: Identify the team by looking for patterns
     child = None
     team = None
+    team_end_pos = 0
 
-    if "JUN2" in normalized and "JUN1" not in normalized:
+    # Check for JUN1R or JUN1B first (more specific)
+    if "JUN1R" in compact:
+        child = "Liza"
+        team = "JUN1 R"
+        team_end_pos = compact.find("JUN1R") + 5
+    elif "JUN1B" in compact:
+        child = "Kseniya"
+        team = "JUN1 B"
+        team_end_pos = compact.find("JUN1B") + 5
+    elif "JUN2" in compact:
         child = "Nastya"
         team = "JUN2"
-    elif "JUN1R" in normalized or "JUN1 R" in normalized:
-        if "JUN1B" not in normalized and "JUN1 B" not in normalized:
-            child = "Liza"
-            team = "JUN1 R"
-    elif "JUN1B" in normalized or "JUN1 B" in normalized:
-        if "JUN1R" not in normalized and "JUN1 R" not in normalized:
-            child = "Kseniya"
-            team = "JUN1 B"
+        team_end_pos = compact.find("JUN2") + 4
 
     if not child:
         return None
 
-    # Extract time from the normalized line
-    # Pattern: time like "11-12:30P" or "6:30-8PM" or "5-6P"
+    # Step 3: Extract the rest after the team name
+    rest = compact[team_end_pos:]
+
+    # Step 4: Extract time - pattern like "6-7:30P" or "11-12:30PM" or "6:30-8PM"
     time_str = ""
-    time_match = re.search(r'(\d{1,2}(?::\d{2})?)-(\d{1,2}(?::\d{2})?)\s*([AP]M?)?', normalized)
+    time_match = re.search(r'(\d{1,2}(?::\d{2})?)-(\d{1,2}(?::\d{2})?)([AP]M?)?', rest)
     if time_match:
         start = time_match.group(1)
         end = time_match.group(2)
@@ -258,13 +294,14 @@ def parse_schedule_line(line: str) -> Optional[dict]:
         except:
             pass
 
-    # Extract location
+    # Step 5: Extract location from the rest
     location_code = ""
     location_info = None
-    for code, info in LOCATIONS.items():
-        if code in normalized:
+    # Check in order of length (longer codes first to avoid partial matches)
+    for code in ["MICC", "MIBC", "MW", "PL"]:
+        if code in rest:
             location_code = code
-            location_info = info
+            location_info = LOCATIONS.get(code)
             break
 
     # Skip entries without both time AND location
@@ -422,6 +459,36 @@ def parse_swim_schedule_tables(tables: list) -> list:
     return events
 
 
+@app.get("/api/test-calendar")
+async def test_calendar():
+    """Test if we can access the user's calendar."""
+    if "access_token" not in token_cache:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+
+    access_token = token_cache["access_token"]
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    # Try to get user info first
+    user_response = requests.get(
+        "https://graph.microsoft.com/v1.0/me",
+        headers=headers
+    )
+
+    # Try to list calendars
+    cal_response = requests.get(
+        "https://graph.microsoft.com/v1.0/me/calendars",
+        headers=headers
+    )
+
+    return {
+        "user": user_response.json() if user_response.ok else {"error": user_response.json()},
+        "calendars": cal_response.json() if cal_response.ok else {"error": cal_response.json()}
+    }
+
+
 @app.post("/api/send-invites")
 async def send_invites(request: Request):
     """Create calendar events and send invites via Microsoft Graph API."""
@@ -435,8 +502,9 @@ async def send_invites(request: Request):
     if not events:
         raise HTTPException(status_code=400, detail="No events to create")
 
-    if not attendees:
-        raise HTTPException(status_code=400, detail="No attendees specified")
+    # Allow creating events without attendees for testing
+    # if not attendees:
+    #     raise HTTPException(status_code=400, detail="No attendees specified")
 
     access_token = token_cache["access_token"]
     headers = {
@@ -498,6 +566,12 @@ async def send_invites(request: Request):
                 headers=headers,
                 json=calendar_event
             )
+
+            # Debug logging
+            print(f"Event: {event['title']}")
+            print(f"Date sent: {event.get('date')} -> Start: {start_datetime}, End: {end_datetime}")
+            print(f"Status: {response.status_code}")
+            print(f"Response: {response.text[:500] if response.text else 'No response'}")
 
             if response.status_code in [200, 201]:
                 results.append({
