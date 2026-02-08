@@ -223,8 +223,9 @@ def merge_same_day_events(events: list) -> list:
 
                     all_times.append((start_mins, end_mins, start_time, start_ampm, end_time, end_ampm))
 
-                if event.get("location_code"):
-                    locations.add(event.get("location_code"))
+                loc = event.get("location_code")
+                if loc and loc != "DL":
+                    locations.add(loc)
 
             if all_times:
                 # Find earliest start and latest end
@@ -234,17 +235,27 @@ def merge_same_day_events(events: list) -> list:
                 # Build merged time string
                 merged_time = f"{earliest[2]} {earliest[3]} - {latest[4]} {latest[5]}"
 
+                # Find the real location (not DL)
+                real_location = ""
+                real_location_info = None
+                for event in group:
+                    loc = event.get("location_code", "")
+                    if loc and loc != "DL":
+                        real_location = loc
+                        real_location_info = LOCATIONS.get(loc)
+                        break
+
                 # Use the first event as base and update it
                 merged_event = group[0].copy()
                 merged_event["time"] = merged_time
+                if real_location:
+                    merged_event["location_code"] = real_location
+                    merged_event["location_name"] = real_location_info["name"] if real_location_info else ""
+                    merged_event["location_address"] = real_location_info["address"] if real_location_info else ""
 
-                # Update title with merged time
+                # Update title with merged time and real location
                 location_code = merged_event.get("location_code", "")
                 merged_event["title"] = f"{child} @{location_code} {merged_time}"
-
-                # If multiple locations, note them (rare case)
-                if len(locations) > 1:
-                    merged_event["location_code"] = "/".join(sorted(locations))
 
                 merged_events.append(merged_event)
             else:
@@ -379,6 +390,8 @@ def parse_schedule_line(line: str) -> Optional[dict]:
     # Step 5: Extract location from the rest
     location_code = ""
     location_info = None
+    is_dry_land = "DL" in rest
+
     # Check in order of length (longer codes first to avoid partial matches)
     for code in ["MICC", "MIBC", "MW", "PL"]:
         if code in rest:
@@ -386,9 +399,16 @@ def parse_schedule_line(line: str) -> Optional[dict]:
             location_info = LOCATIONS.get(code)
             break
 
-    # Skip entries without both time AND location
-    if not time_str or not location_code:
+    # Skip entries without time
+    # Allow entries without location if it's DL (Dry Land) - will merge with practice later
+    if not time_str:
         return None
+    if not location_code and not is_dry_land:
+        return None
+
+    # For DL entries, mark them but they'll get location from merged practice
+    if is_dry_land and not location_code:
+        location_code = "DL"
 
     # Build the title: "Liza @MICC 6:00 PM - 7:30 PM"
     title = f"{child} @{location_code} {time_str}"
