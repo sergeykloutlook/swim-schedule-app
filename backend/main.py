@@ -665,9 +665,9 @@ def parse_event_datetime(event: dict) -> tuple:
         practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=start_hour, minute=start_min))
         practice_end = datetime.combine(parsed_date, datetime.min.time().replace(hour=end_hour, minute=end_min))
 
-        # Add commute buffer: 45 min before start, 30 min after end
+        # Add commute buffer: 45 min before start, no buffer after end
         start_time = practice_start - timedelta(minutes=45)
-        end_time = practice_end + timedelta(minutes=30)
+        end_time = practice_end
     else:
         # Default to 9 AM - 10 AM if no time found
         start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=9))
