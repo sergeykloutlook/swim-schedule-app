@@ -390,7 +390,8 @@ def parse_schedule_line(line: str) -> Optional[dict]:
     # Step 5: Extract location from the rest
     location_code = ""
     location_info = None
-    is_dry_land = "DL" in rest
+    # Check for DL in the entire compact string, not just rest (DL might be before team name)
+    is_dry_land = "DL" in compact
 
     # Check in order of length (longer codes first to avoid partial matches)
     for code in ["MICC", "MIBC", "MW", "PL"]:
