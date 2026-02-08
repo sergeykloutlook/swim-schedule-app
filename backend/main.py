@@ -170,6 +170,90 @@ def normalize_text(text: str) -> str:
     return re.sub(r'\s+', '', text).strip()
 
 
+def parse_time_to_minutes(time_str: str, ampm: str) -> int:
+    """Convert time string like '6:00' with AM/PM to minutes from midnight."""
+    parts = time_str.split(':')
+    hour = int(parts[0])
+    minute = int(parts[1]) if len(parts) > 1 else 0
+
+    if ampm == "PM" and hour != 12:
+        hour += 12
+    elif ampm == "AM" and hour == 12:
+        hour = 0
+
+    return hour * 60 + minute
+
+
+def merge_same_day_events(events: list) -> list:
+    """
+    Merge events for the same child on the same date.
+    For example, if there's DL (Dry Land) and regular practice on the same day,
+    merge them into one event with earliest start and latest end time.
+    """
+    from collections import defaultdict
+
+    # Group events by (child, date)
+    grouped = defaultdict(list)
+    for event in events:
+        key = (event.get("child"), event.get("date"))
+        grouped[key].append(event)
+
+    merged_events = []
+    for (child, date), group in grouped.items():
+        if len(group) == 1:
+            # Only one event, keep as is
+            merged_events.append(group[0])
+        else:
+            # Multiple events - merge by finding earliest start and latest end
+            all_times = []
+            locations = set()
+
+            for event in group:
+                time_str = event.get("time", "")
+                # Parse "6:00 PM - 7:30 PM" format
+                match = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)', time_str.upper())
+                if match:
+                    start_time = f"{match.group(1)}:{match.group(2)}"
+                    start_ampm = match.group(3)
+                    end_time = f"{match.group(4)}:{match.group(5)}"
+                    end_ampm = match.group(6)
+
+                    start_mins = parse_time_to_minutes(start_time, start_ampm)
+                    end_mins = parse_time_to_minutes(end_time, end_ampm)
+
+                    all_times.append((start_mins, end_mins, start_time, start_ampm, end_time, end_ampm))
+
+                if event.get("location_code"):
+                    locations.add(event.get("location_code"))
+
+            if all_times:
+                # Find earliest start and latest end
+                earliest = min(all_times, key=lambda x: x[0])
+                latest = max(all_times, key=lambda x: x[1])
+
+                # Build merged time string
+                merged_time = f"{earliest[2]} {earliest[3]} - {latest[4]} {latest[5]}"
+
+                # Use the first event as base and update it
+                merged_event = group[0].copy()
+                merged_event["time"] = merged_time
+
+                # Update title with merged time
+                location_code = merged_event.get("location_code", "")
+                merged_event["title"] = f"{child} @{location_code} {merged_time}"
+
+                # If multiple locations, note them (rare case)
+                if len(locations) > 1:
+                    merged_event["location_code"] = "/".join(sorted(locations))
+
+                merged_events.append(merged_event)
+            else:
+                # Couldn't parse times, keep first event
+                merged_events.append(group[0])
+
+    return merged_events
+
+
 def extract_schedule_from_pdf(pdf_path: Path) -> list:
     """
     Extract schedule events from a swimming practice PDF.
@@ -187,6 +271,9 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
 
         if all_tables:
             events = parse_swim_schedule_tables(all_tables)
+
+    # Merge events for same child on same date (e.g., DL + practice)
+    events = merge_same_day_events(events)
 
     # Sort events by date and time
     def sort_key(event):
