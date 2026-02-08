@@ -200,28 +200,21 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
         except:
             parsed_date = datetime.max
 
-        # Parse start time from time string like "8-9:30AM" or "5:30-6:45PM" or "11-12:30PM"
+        # Parse start time from time string like "8-9:30AM" or "5:30-6:45PM"
+        # AM/PM applies to both start and end times (practices are < 2 hours)
         start_hour = 0
         start_min = 0
         try:
-            # Match pattern like "11-12:30PM" or "5:30-6:45PM"
+            # Match pattern like "6-7:30PM" or "5:30-6:45PM"
             time_match = re.match(r'(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?([AP]M)?', time_str.upper())
             if time_match:
                 start_hour = int(time_match.group(1))
                 start_min = int(time_match.group(2) or 0)
-                end_hour = int(time_match.group(3))
                 ampm = time_match.group(5) or ""
 
-                # Smart AM/PM detection:
-                # - "11-12:30PM" = 11 AM to 12:30 PM (morning practice ending at noon)
-                # - "5-6PM" = 5 PM to 6 PM (evening practice)
-                # If start hour >= 10 and end hour <= 12, it's morning (AM start)
-                if ampm == "PM":
-                    if start_hour >= 10 and start_hour <= 11 and end_hour >= 12:
-                        # Morning practice: 11 AM to 12:30 PM
-                        pass  # Keep start_hour as AM
-                    elif start_hour != 12:
-                        start_hour += 12
+                # AM/PM applies to both start and end (all practices are same AM/PM)
+                if ampm == "PM" and start_hour != 12:
+                    start_hour += 12
                 elif ampm == "AM" and start_hour == 12:
                     start_hour = 0
         except:
@@ -668,8 +661,12 @@ def parse_event_datetime(event: dict) -> tuple:
         elif end_ampm and end_ampm.upper() == "AM" and end_hour == 12:
             end_hour = 0
 
-        start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=start_hour, minute=start_min))
-        end_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=end_hour, minute=end_min))
+        practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=start_hour, minute=start_min))
+        practice_end = datetime.combine(parsed_date, datetime.min.time().replace(hour=end_hour, minute=end_min))
+
+        # Add commute buffer: 45 min before start, 30 min after end
+        start_time = practice_start - timedelta(minutes=45)
+        end_time = practice_end + timedelta(minutes=30)
     else:
         # Look for single time
         single_time_match = re.search(r"(\d{1,2}):?(\d{2})?\s*(AM|PM|am|pm)?", time_str)
@@ -683,8 +680,12 @@ def parse_event_datetime(event: dict) -> tuple:
             elif ampm and ampm.upper() == "AM" and hour == 12:
                 hour = 0
 
-            start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=hour, minute=minute))
-            end_time = start_time + timedelta(hours=1)  # Default 1 hour duration
+            practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=hour, minute=minute))
+            practice_end = practice_start + timedelta(hours=1)  # Default 1 hour duration
+
+            # Add commute buffer: 45 min before start, 30 min after end
+            start_time = practice_start - timedelta(minutes=45)
+            end_time = practice_end + timedelta(minutes=30)
         else:
             # Default to 9 AM if no time found
             start_time = datetime.combine(parsed_date, datetime.min.time().replace(hour=9))
