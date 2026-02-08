@@ -200,19 +200,17 @@ def extract_schedule_from_pdf(pdf_path: Path) -> list:
         except:
             parsed_date = datetime.max
 
-        # Parse start time from time string like "8-9:30AM" or "5:30-6:45PM"
-        # AM/PM applies to both start and end times (practices are < 2 hours)
+        # Parse start time from time string like "6:00 PM - 7:30 PM"
         start_hour = 0
         start_min = 0
         try:
-            # Match pattern like "6-7:30PM" or "5:30-6:45PM"
-            time_match = re.match(r'(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?([AP]M)?', time_str.upper())
+            # Match pattern like "6:00 PM - 7:30 PM"
+            time_match = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)', time_str.upper())
             if time_match:
                 start_hour = int(time_match.group(1))
-                start_min = int(time_match.group(2) or 0)
-                ampm = time_match.group(5) or ""
+                start_min = int(time_match.group(2))
+                ampm = time_match.group(3)
 
-                # AM/PM applies to both start and end (all practices are same AM/PM)
                 if ampm == "PM" and start_hour != 12:
                     start_hour += 12
                 elif ampm == "AM" and start_hour == 12:
@@ -270,20 +268,24 @@ def parse_schedule_line(line: str) -> Optional[dict]:
     rest = compact[team_end_pos:]
 
     # Step 4: Extract time - pattern like "6-7:30P" or "11-12:30PM" or "6:30-8PM"
+    # Format output with explicit AM/PM on BOTH start and end times
     time_str = ""
-    time_match = re.search(r'(\d{1,2}(?::\d{2})?)-(\d{1,2}(?::\d{2})?)([AP]M?)?', rest)
+    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?([AP]M?)?', rest)
     if time_match:
-        start = time_match.group(1)
-        end = time_match.group(2)
-        ampm = time_match.group(3) or ""
+        start_hour = time_match.group(1)
+        start_min = time_match.group(2) or "00"
+        end_hour = time_match.group(3)
+        end_min = time_match.group(4) or "00"
+        ampm = time_match.group(5) or ""
         if ampm:
             if len(ampm) == 1:
                 ampm = ampm + "M"
         # Validate start hour (should be 1-12 for 12-hour time)
         try:
-            start_hour = int(start.split(':')[0])
-            if start_hour >= 1 and start_hour <= 12:
-                time_str = f"{start}-{end}{ampm}"
+            sh = int(start_hour)
+            if sh >= 1 and sh <= 12 and ampm:
+                # Format with explicit AM/PM on both: "6:00 PM - 7:30 PM"
+                time_str = f"{start_hour}:{start_min} {ampm} - {end_hour}:{end_min} {ampm}"
         except:
             pass
 
@@ -301,7 +303,7 @@ def parse_schedule_line(line: str) -> Optional[dict]:
     if not time_str or not location_code:
         return None
 
-    # Build the title: "Liza @MICC 11-12:30PM"
+    # Build the title: "Liza @MICC 6:00 PM - 7:30 PM"
     title = f"{child} @{location_code} {time_str}"
 
     return {
@@ -631,39 +633,33 @@ def parse_event_datetime(event: dict) -> tuple:
         # Default to today if no date found
         parsed_date = datetime.now().date()
 
-    # Parse time - format is like "6-7:30PM" or "11-12:30AM"
-    # AM/PM at end applies to BOTH start and end times (all practices < 2 hours)
+    # Parse time - format is "6:00 PM - 7:30 PM" with explicit AM/PM on both
     start_time = None
     end_time = None
 
-    # Extract AM/PM from end of string first
-    time_upper = time_str.upper().strip()
-    ampm = None
-    if time_upper.endswith("PM"):
-        ampm = "PM"
-        time_upper = time_upper[:-2]
-    elif time_upper.endswith("AM"):
-        ampm = "AM"
-        time_upper = time_upper[:-2]
-
-    # Now parse the time range without AM/PM: "6-7:30" or "11-12:30"
-    time_range_match = re.match(r"(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?", time_upper)
+    # Match format: "6:00 PM - 7:30 PM" or "11:00 AM - 12:30 PM"
+    time_range_match = re.match(
+        r"(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)",
+        time_str.upper().strip()
+    )
 
     if time_range_match:
         start_hour = int(time_range_match.group(1))
-        start_min = int(time_range_match.group(2) or 0)
-        end_hour = int(time_range_match.group(3))
-        end_min = int(time_range_match.group(4) or 0)
+        start_min = int(time_range_match.group(2))
+        start_ampm = time_range_match.group(3)
+        end_hour = int(time_range_match.group(4))
+        end_min = int(time_range_match.group(5))
+        end_ampm = time_range_match.group(6)
 
-        # Apply AM/PM to both start and end
-        if ampm == "PM" and start_hour != 12:
+        # Convert to 24-hour format
+        if start_ampm == "PM" and start_hour != 12:
             start_hour += 12
-        elif ampm == "AM" and start_hour == 12:
+        elif start_ampm == "AM" and start_hour == 12:
             start_hour = 0
 
-        if ampm == "PM" and end_hour != 12:
+        if end_ampm == "PM" and end_hour != 12:
             end_hour += 12
-        elif ampm == "AM" and end_hour == 12:
+        elif end_ampm == "AM" and end_hour == 12:
             end_hour = 0
 
         practice_start = datetime.combine(parsed_date, datetime.min.time().replace(hour=start_hour, minute=start_min))
