@@ -387,37 +387,25 @@ def parse_swim_schedule_tables(tables: list) -> list:
                             dates_in_row.append((col_idx, date_num))
 
             if len(dates_in_row) >= 3:
-                # This is a date row - figure out which month each date belongs to
-                # Calendar shows previous month dates at start (high numbers like 26-31)
-                # then current month dates (1, 2, 3...)
+                # This is a date row
+                # We ONLY want dates from the calendar month (shown in title)
+                # Ignore any previous month dates that appear at start of calendar grid
 
-                prev_month = calendar_month - 1 if calendar_month > 1 else 12
-                prev_year = calendar_year if calendar_month > 1 else calendar_year - 1
-
-                # Check if this row has a mix of high and low dates (month transition)
-                # or just current month dates
-                has_low_dates = any(d[1] < 10 for d in dates_in_row)
-                has_high_dates = any(d[1] > 20 for d in dates_in_row)
+                # Get days in the calendar month
+                import calendar
+                days_in_month = calendar.monthrange(calendar_year, calendar_month)[1]
 
                 for col_idx, date_num in dates_in_row:
-                    # If we have both high and low dates in same row, high ones are prev month
-                    # If row has high dates (26-31) but no low dates, and it's first data rows, prev month
-                    if date_num > 20 and has_low_dates:
-                        # This high date is before the month transition
-                        month_abbrev = MONTH_ABBREV[prev_month - 1]
-                        date_str = f"{month_abbrev} {date_num}, {prev_year}"
-                    elif date_num > 20 and not has_low_dates and row_idx <= header_row_idx + 2:
-                        # First week with all high dates = previous month
-                        month_abbrev = MONTH_ABBREV[prev_month - 1]
-                        date_str = f"{month_abbrev} {date_num}, {prev_year}"
-                    else:
-                        # Current calendar month
+                    # Only include dates that are valid for the calendar month
+                    # (1 to last day of month)
+                    if 1 <= date_num <= days_in_month:
                         month_abbrev = MONTH_ABBREV[calendar_month - 1]
                         date_str = f"{month_abbrev} {date_num}, {calendar_year}"
 
-                    # Store for both this row and the next row (data row)
-                    all_date_info[(row_idx, col_idx)] = date_str
-                    all_date_info[(row_idx + 1, col_idx)] = date_str
+                        # Store for both this row and the next row (data row)
+                        all_date_info[(row_idx, col_idx)] = date_str
+                        all_date_info[(row_idx + 1, col_idx)] = date_str
+                    # Dates outside the month range (e.g., 26-31 in February) are ignored
 
         # Parse data rows (cells with team schedules)
         for row_idx in range(header_row_idx + 1, len(table)):
