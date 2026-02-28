@@ -4,6 +4,7 @@ import re
 import base64
 from datetime import datetime, timedelta
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -157,8 +158,8 @@ async def parse_pdf(file: UploadFile = File(...)):
 
     try:
         pdf_bytes = await file.read()
-        events = parse_pdf_with_llm(pdf_bytes)
-        return {"success": True, "events": events}
+        events, misalignments = parse_pdf_with_llm(pdf_bytes)
+        return {"success": True, "events": events, "misalignments": misalignments}
 
     except anthropic.APIError as e:
         raise HTTPException(status_code=500, detail=f"Claude API error: {str(e)}")
@@ -166,20 +167,11 @@ async def parse_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error parsing PDF: {str(e)}")
 
 
-def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
-    """Send PDF to Claude API for parsing, return flat event list."""
-    # Read LLM instructions
-    instructions_path = BASE_DIR / "llm_instructions.md"
-    with open(instructions_path, "r") as f:
-        llm_prompt = f.read()
-
-    # Encode PDF as base64
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
-
-    # Call Claude API
+def call_llm_for_schedule(pdf_b64: str, llm_prompt: str, model: str) -> dict:
+    """Call a Claude model with the PDF and return the raw grouped JSON dict."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model=model,
         max_tokens=4096,
         messages=[
             {
@@ -202,17 +194,16 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
         ],
     )
 
-    # Extract JSON from response
     response_text = message.content[0].text.strip()
-
-    # Strip markdown code fences if present
     if response_text.startswith("```"):
         response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
         response_text = re.sub(r'\s*```$', '', response_text)
 
-    grouped_data = json.loads(response_text)
+    return json.loads(response_text)
 
-    # Convert date-grouped format to flat event list
+
+def enrich_grouped_to_events(grouped_data: dict) -> list:
+    """Convert date-grouped format to flat, enriched event list."""
     events = []
     for date_str, children in grouped_data.items():
         for child_name, details in children.items():
@@ -237,7 +228,6 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
                 "dl": has_dl,
             })
 
-    # Sort by date then child name
     def sort_key(event):
         try:
             parsed_date = datetime.strptime(event["date"], "%b %d, %Y")
@@ -247,6 +237,103 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
 
     events.sort(key=sort_key)
     return events
+
+
+def compare_grouped_results(opus_data: dict, sonnet_data: dict) -> list:
+    """Compare two grouped schedule JSONs and return a list of misalignments."""
+    misalignments = []
+    all_dates = set(opus_data.keys()) | set(sonnet_data.keys())
+
+    def date_sort_key(d):
+        try:
+            return datetime.strptime(d, "%b %d, %Y")
+        except ValueError:
+            return datetime.max
+
+    for date_str in sorted(all_dates, key=date_sort_key):
+        opus_children = opus_data.get(date_str)
+        sonnet_children = sonnet_data.get(date_str)
+
+        if opus_children is None:
+            misalignments.append({
+                "date": date_str, "child": None, "type": "missing_date",
+                "opus_value": "absent", "sonnet_value": "present",
+            })
+            continue
+
+        if sonnet_children is None:
+            misalignments.append({
+                "date": date_str, "child": None, "type": "missing_date",
+                "opus_value": "present", "sonnet_value": "absent",
+            })
+            continue
+
+        all_children = set(opus_children.keys()) | set(sonnet_children.keys())
+        for child_name in sorted(all_children):
+            opus_details = opus_children.get(child_name)
+            sonnet_details = sonnet_children.get(child_name)
+
+            if opus_details is None:
+                misalignments.append({
+                    "date": date_str, "child": child_name, "type": "missing_child",
+                    "opus_value": "absent", "sonnet_value": "present",
+                })
+                continue
+
+            if sonnet_details is None:
+                misalignments.append({
+                    "date": date_str, "child": child_name, "type": "missing_child",
+                    "opus_value": "present", "sonnet_value": "absent",
+                })
+                continue
+
+            for field in ("time", "location_code", "dl"):
+                oval = opus_details.get(field)
+                sval = sonnet_details.get(field)
+                if oval != sval:
+                    misalignments.append({
+                        "date": date_str, "child": child_name, "type": field,
+                        "opus_value": oval, "sonnet_value": sval,
+                    })
+
+    return misalignments
+
+
+def parse_pdf_with_llm(pdf_bytes: bytes) -> tuple:
+    """Send PDF to two Claude models concurrently, return (events, misalignments)."""
+    instructions_path = BASE_DIR / "llm_instructions.md"
+    with open(instructions_path, "r") as f:
+        llm_prompt = f.read()
+
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        opus_future = executor.submit(call_llm_for_schedule, pdf_b64, llm_prompt, "claude-opus-4-6")
+        sonnet_future = executor.submit(call_llm_for_schedule, pdf_b64, llm_prompt, "claude-sonnet-4-6")
+
+        # Opus is required
+        opus_data = opus_future.result()
+
+        # Sonnet is best-effort
+        sonnet_data = None
+        sonnet_error = None
+        try:
+            sonnet_data = sonnet_future.result()
+        except Exception as e:
+            sonnet_error = str(e)
+
+    events = enrich_grouped_to_events(opus_data)
+
+    if sonnet_data is not None:
+        misalignments = compare_grouped_results(opus_data, sonnet_data)
+    else:
+        misalignments = [{
+            "date": "", "child": None, "type": "verification_error",
+            "opus_value": None, "sonnet_value": None,
+            "error": f"Sonnet verification failed: {sonnet_error}",
+        }]
+
+    return events, misalignments
 
 
 @app.get("/api/test-calendar")

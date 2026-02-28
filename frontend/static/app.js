@@ -37,6 +37,12 @@ document.addEventListener('DOMContentLoaded', () => {
             { child: "Nastya", team: "JUN2", date: "Jan 7, 2026", time: "5:30 PM - 8:00 PM", location_code: "MW", location_name: "Mary Wayte Swimming Pool", location_address: "8815 SE 40th St, Mercer Island, WA 98040", title: "Nastya @MW 5:30 PM - 8:00 PM DL", dl: true },
             { child: "Liza", team: "JUN1 R", date: "Jan 8, 2026", time: "5:00 PM - 6:30 PM", location_code: "MIBC", location_name: "Mercer Island Beach Club", location_address: "8326 Avalon Dr, Mercer Island, WA 98040", title: "Liza @MIBC 5:00 PM - 6:30 PM", dl: false },
         ];
+        const mockMisalignments = [
+            { date: "Jan 5, 2026", child: "Nastya", type: "time", opus_value: "5:00 PM - 8:00 PM", sonnet_value: "5:00 PM - 7:30 PM" },
+            { date: "Jan 7, 2026", child: "Kseniya", type: "location_code", opus_value: "PL", sonnet_value: "MICC" },
+            { date: "Jan 8, 2026", child: null, type: "missing_date", opus_value: "present", sonnet_value: "absent" },
+        ];
+        displayMisalignments(mockMisalignments);
         displayEvents(parsedEvents);
         eventsSection.style.display = 'block';
         attendeesSection.style.display = 'block';
@@ -83,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     parseBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
 
-        showLoading('Parsing PDF with AI (this may take a moment)...');
+        showLoading('Parsing PDF with dual-model verification (this may take a moment)...');
 
         const formData = new FormData();
         formData.append('file', selectedFile);
@@ -101,6 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             parsedEvents = data.events;
+            displayMisalignments(data.misalignments || []);
             displayEvents(parsedEvents);
             eventsSection.style.display = 'block';
             attendeesSection.style.display = 'block';
@@ -115,6 +122,77 @@ document.addEventListener('DOMContentLoaded', () => {
             hideLoading();
         }
     });
+
+    function displayMisalignments(misalignments) {
+        const container = document.getElementById('verificationResult');
+        if (!container) return;
+
+        const errors = misalignments.filter(m => m.type === 'verification_error');
+        const diffs = misalignments.filter(m => m.type !== 'verification_error');
+
+        if (errors.length > 0) {
+            container.innerHTML = `
+                <div class="verification-warning">
+                    <span class="verification-icon">&#9888;</span>
+                    <span>Verification model (Sonnet) failed: ${escapeHtml(errors[0].error || 'Unknown error')}. Results shown are from Opus only.</span>
+                </div>`;
+            container.style.display = 'block';
+            return;
+        }
+
+        if (diffs.length === 0) {
+            container.innerHTML = `
+                <div class="verification-ok">
+                    <span class="verification-icon">&#10003;</span>
+                    <span>Both models (Opus and Sonnet) agree on all parsed events.</span>
+                </div>`;
+            container.style.display = 'block';
+            return;
+        }
+
+        const typeLabels = {
+            'missing_date': 'Missing date',
+            'missing_child': 'Missing child',
+            'time': 'Time differs',
+            'location_code': 'Location differs',
+            'dl': 'DL flag differs',
+        };
+
+        let rows = diffs.map(m => {
+            const typeLabel = typeLabels[m.type] || m.type;
+            const child = m.child ? escapeHtml(m.child) : '(all)';
+            const opusVal = m.opus_value != null ? escapeHtml(String(m.opus_value)) : '\u2014';
+            const sonnetVal = m.sonnet_value != null ? escapeHtml(String(m.sonnet_value)) : '\u2014';
+            return `<tr>
+                <td>${escapeHtml(m.date)}</td>
+                <td>${child}</td>
+                <td>${escapeHtml(typeLabel)}</td>
+                <td class="opus-val">${opusVal}</td>
+                <td class="sonnet-val">${sonnetVal}</td>
+            </tr>`;
+        }).join('');
+
+        container.innerHTML = `
+            <div class="verification-mismatch">
+                <div class="verification-mismatch-header">
+                    <span class="verification-icon">&#9888;</span>
+                    <span>${diffs.length} misalignment${diffs.length > 1 ? 's' : ''} found between Opus and Sonnet. Opus result is shown below.</span>
+                </div>
+                <table class="misalignment-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Child</th>
+                            <th>Issue</th>
+                            <th>Opus</th>
+                            <th>Sonnet</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+        container.style.display = 'block';
+    }
 
     function displayEvents(events) {
         if (events.length === 0) {
