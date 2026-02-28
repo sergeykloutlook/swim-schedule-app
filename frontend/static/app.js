@@ -21,6 +21,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const testUxBtn = document.getElementById('testUxBtn');
 
+    const LOCATIONS = {
+        MW: { name: "Mary Wayte Swimming Pool", address: "8815 SE 40th St, Mercer Island, WA 98040" },
+        MICC: { name: "Mercer Island Country Club", address: "8700 SE 71st St, Mercer Island, WA 98040" },
+        MIBC: { name: "Mercer Island Beach Club", address: "8326 Avalon Dr, Mercer Island, WA 98040" },
+        PL: { name: "Phantom Lake Bath & Tennis Club", address: "15810 SE 24th St, Bellevue, WA 98008" },
+    };
+
     let selectedFile = null;
     let parsedEvents = [];
     let attendees = [];
@@ -257,11 +264,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="event-card-body">
                             <div class="event-card-row">
                                 <span class="event-card-icon">&#128339;</span>
-                                <span>${escapeHtml(timeStr)}</span>
+                                <input type="text" class="event-time-input" data-index="${event._index}" value="${escapeHtml(timeStr)}">
                             </div>
                             <div class="event-card-row">
                                 <span class="event-card-icon">&#128205;</span>
-                                <span>${escapeHtml(locationCode)}${locationFull ? ' — ' + escapeHtml(locationFull) : ''}</span>
+                                <select class="event-location-select" data-index="${event._index}">
+                                    ${Object.entries(LOCATIONS).map(([code, loc]) =>
+                                        `<option value="${code}" ${code === locationCode ? 'selected' : ''}>${code} — ${loc.name}</option>`
+                                    ).join('')}
+                                </select>
                             </div>
                         </div>
                     </div>`;
@@ -296,6 +307,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 cb.addEventListener('change', () => {
                     toggle.checked = Array.from(checkboxes).every(c => c.checked);
                 });
+            });
+        });
+
+        // Wire up inline editing for time and location
+        document.querySelectorAll('.event-time-input').forEach(input => {
+            input.addEventListener('change', (e) => {
+                const idx = parseInt(e.target.dataset.index);
+                const ev = parsedEvents[idx];
+                ev.time = e.target.value;
+                ev.title = `${ev.child} @${ev.location_code} ${ev.time}${ev.dl ? ' DL' : ''}`;
+            });
+        });
+
+        document.querySelectorAll('.event-location-select').forEach(select => {
+            select.addEventListener('change', (e) => {
+                const idx = parseInt(e.target.dataset.index);
+                const code = e.target.value;
+                const loc = LOCATIONS[code];
+                const ev = parsedEvents[idx];
+                ev.location_code = code;
+                ev.location_name = loc ? loc.name : '';
+                ev.location_address = loc ? loc.address : '';
+                ev.title = `${ev.child} @${ev.location_code} ${ev.time}${ev.dl ? ' DL' : ''}`;
             });
         });
     }
