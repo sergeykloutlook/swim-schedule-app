@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     parseBtn.addEventListener('click', async () => {
         if (!selectedFile) return;
 
-        showLoading('Parsing PDF...');
+        showLoading('Parsing PDF with AI (this may take a moment)...');
 
         const formData = new FormData();
         formData.append('file', selectedFile);
@@ -97,36 +97,86 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function displayEvents(events) {
         if (events.length === 0) {
-            eventsList.innerHTML = '<p style="color: #666; text-align: center;">No events found for Nastya (JUN2), Kseniya (JUN1 B), or Liza (JUN1 R) in the PDF.</p>';
+            eventsList.innerHTML = '<p class="no-events">No events found for Nastya (JUN2), Kseniya (JUN1 B), or Liza (JUN1 R) in the PDF.</p>';
             return;
         }
 
-        // Display only events for our kids with proper format
-        eventsList.innerHTML = events.map((event, index) => {
-            const childName = event.child || '';
-            const locationCode = event.location_code || 'TBD';
-            const timeStr = event.time || 'TBD';
-            const dateStr = event.date || 'TBD';
-            const locationFull = event.location_name && event.location_address
-                ? `${event.location_name}, ${event.location_address}`
-                : event.location_name || '';
+        // Group events by date
+        const grouped = {};
+        events.forEach((event, index) => {
+            const dateStr = event.date || 'Unknown Date';
+            if (!grouped[dateStr]) grouped[dateStr] = [];
+            grouped[dateStr].push({ ...event, _index: index });
+        });
 
-            // Title format: "Liza @MICC 5:00 - 6:00 pm"
-            const eventTitle = event.title || `${childName} @${locationCode} ${timeStr}`;
+        let html = '';
+        for (const [dateStr, dateEvents] of Object.entries(grouped)) {
+            // Format date with day of week
+            let displayDate = dateStr;
+            try {
+                const d = new Date(dateStr);
+                if (!isNaN(d)) {
+                    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                    displayDate = `${days[d.getDay()]}, ${dateStr}`;
+                }
+            } catch (e) { /* keep original */ }
 
-            return `
-            <div class="event-item" data-child="${escapeHtml(childName)}">
-                <input type="checkbox" id="event-${index}" checked data-index="${index}">
-                <div class="event-details">
-                    <div class="event-title">${escapeHtml(eventTitle)}</div>
-                    <div class="event-info">
-                        <div class="event-date"><strong>Date:</strong> ${escapeHtml(dateStr)}</div>
-                        <div class="event-time-detail"><strong>Time:</strong> ${escapeHtml(timeStr)}</div>
-                        ${locationFull ? `<div class="event-location"><strong>Location:</strong> ${escapeHtml(locationFull)}</div>` : ''}
-                    </div>
+            html += `
+            <div class="date-group">
+                <div class="date-header">
+                    <span class="date-label">${escapeHtml(displayDate)}</span>
+                    <label class="date-toggle">
+                        <input type="checkbox" class="date-select-all" checked>
+                        <span>All</span>
+                    </label>
                 </div>
-            </div>
-        `}).join('');
+                <div class="date-events">`;
+
+            for (const event of dateEvents) {
+                const childName = event.child || '';
+                const locationCode = event.location_code || 'TBD';
+                const timeStr = event.time || 'TBD';
+                const locationFull = event.location_name && event.location_address
+                    ? `${event.location_name}, ${event.location_address}`
+                    : event.location_name || '';
+
+                html += `
+                    <div class="event-item" data-child="${escapeHtml(childName)}">
+                        <input type="checkbox" id="event-${event._index}" checked data-index="${event._index}">
+                        <div class="event-details">
+                            <div class="event-title">${escapeHtml(childName)}</div>
+                            <div class="event-meta">
+                                <span class="event-time-badge">${escapeHtml(timeStr)}</span>
+                                <span class="event-location-badge">@ ${escapeHtml(locationCode)}</span>
+                            </div>
+                            ${locationFull ? `<div class="event-location-full">${escapeHtml(locationFull)}</div>` : ''}
+                        </div>
+                    </div>`;
+            }
+
+            html += `
+                </div>
+            </div>`;
+        }
+
+        eventsList.innerHTML = html;
+
+        // Wire up per-date "All" toggles
+        document.querySelectorAll('.date-group').forEach(group => {
+            const toggle = group.querySelector('.date-select-all');
+            const checkboxes = group.querySelectorAll('.event-item input[type="checkbox"]');
+
+            toggle.addEventListener('change', () => {
+                checkboxes.forEach(cb => cb.checked = toggle.checked);
+            });
+
+            // Keep toggle in sync when individual checkboxes change
+            checkboxes.forEach(cb => {
+                cb.addEventListener('change', () => {
+                    toggle.checked = Array.from(checkboxes).every(c => c.checked);
+                });
+            });
+        });
     }
 
     // Select/Deselect all

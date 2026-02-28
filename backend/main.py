@@ -1,16 +1,16 @@
 import os
 import json
 import re
+import base64
 from datetime import datetime, timedelta
-from typing import Optional
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
-import pdfplumber
+import anthropic
 import msal
 import requests
 
@@ -36,6 +36,13 @@ TEAM_TO_CHILD = {
     "JUN1R": "Liza",
     "JUN 1 R": "Liza",
     "JUNIOR 1 RED": "Liza",
+}
+
+# Reverse mapping: child name to canonical team code
+CHILD_TO_TEAM = {
+    "Nastya": "JUN2",
+    "Kseniya": "JUN1 B",
+    "Liza": "JUN1 R",
 }
 
 # Location code to full address mapping
@@ -64,6 +71,9 @@ CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET", "")
 TENANT_ID = os.getenv("AZURE_TENANT_ID", "")
 REDIRECT_URI = os.getenv("REDIRECT_URI", "http://localhost:8000/auth/callback")
 SCOPES = ["User.Read", "Calendars.ReadWrite", "Mail.Send"]
+
+# Anthropic API configuration
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Store tokens in memory (use a database in production)
 token_cache = {}
@@ -135,418 +145,103 @@ async def logout():
 
 @app.post("/api/parse-pdf")
 async def parse_pdf(file: UploadFile = File(...)):
-    """Parse uploaded PDF and extract schedule information."""
+    """Parse uploaded PDF using Claude LLM and extract schedule information."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a PDF file")
 
-    # Save uploaded file temporarily
-    temp_path = BASE_DIR / "temp_upload.pdf"
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Anthropic API key not configured. Please set ANTHROPIC_API_KEY in .env file."
+        )
+
     try:
-        content = await file.read()
-        with open(temp_path, "wb") as f:
-            f.write(content)
-
-        # Extract schedule from PDF
-        events = extract_schedule_from_pdf(temp_path)
-
+        pdf_bytes = await file.read()
+        events = parse_pdf_with_llm(pdf_bytes)
         return {"success": True, "events": events}
 
+    except anthropic.APIError as e:
+        raise HTTPException(status_code=500, detail=f"Claude API error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing PDF: {str(e)}")
 
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
 
+def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
+    """Send PDF to Claude API for parsing, return flat event list."""
+    # Read LLM instructions
+    instructions_path = BASE_DIR / "llm_instructions.md"
+    with open(instructions_path, "r") as f:
+        llm_prompt = f.read()
 
-def normalize_text(text: str) -> str:
-    """
-    Clean up text with spacing issues from PDF extraction.
-    E.g., "J U N 1 R" -> "JUN1R", "6 : 3 0" -> "6:30"
-    """
-    if not text:
-        return ""
-    # Remove all spaces to normalize, then we'll parse it
-    return re.sub(r'\s+', '', text).strip()
+    # Encode PDF as base64
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
+    # Call Claude API
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    message = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": pdf_b64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": llm_prompt,
+                    },
+                ],
+            }
+        ],
+    )
 
-def parse_time_to_minutes(time_str: str, ampm: str) -> int:
-    """Convert time string like '6:00' with AM/PM to minutes from midnight."""
-    parts = time_str.split(':')
-    hour = int(parts[0])
-    minute = int(parts[1]) if len(parts) > 1 else 0
+    # Extract JSON from response
+    response_text = message.content[0].text.strip()
 
-    if ampm == "PM" and hour != 12:
-        hour += 12
-    elif ampm == "AM" and hour == 12:
-        hour = 0
+    # Strip markdown code fences if present
+    if response_text.startswith("```"):
+        response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
+        response_text = re.sub(r'\s*```$', '', response_text)
 
-    return hour * 60 + minute
+    grouped_data = json.loads(response_text)
 
-
-def merge_same_day_events(events: list) -> list:
-    """
-    Merge events for the same child on the same date.
-    For example, if there's DL (Dry Land) and regular practice on the same day,
-    merge them into one event with earliest start and latest end time.
-    """
-    from collections import defaultdict
-
-    # Group events by (child, date)
-    grouped = defaultdict(list)
-    for event in events:
-        key = (event.get("child"), event.get("date"))
-        grouped[key].append(event)
-
-    merged_events = []
-    for (child, date), group in grouped.items():
-        if len(group) == 1:
-            # Only one event, keep as is
-            merged_events.append(group[0])
-        else:
-            # Multiple events - merge by finding earliest start and latest end
-            all_times = []
-            locations = set()
-
-            for event in group:
-                time_str = event.get("time", "")
-                # Parse "6:00 PM - 7:30 PM" format
-                match = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)', time_str.upper())
-                if match:
-                    start_time = f"{match.group(1)}:{match.group(2)}"
-                    start_ampm = match.group(3)
-                    end_time = f"{match.group(4)}:{match.group(5)}"
-                    end_ampm = match.group(6)
-
-                    start_mins = parse_time_to_minutes(start_time, start_ampm)
-                    end_mins = parse_time_to_minutes(end_time, end_ampm)
-
-                    all_times.append((start_mins, end_mins, start_time, start_ampm, end_time, end_ampm))
-
-                loc = event.get("location_code")
-                if loc and loc != "DL":
-                    locations.add(loc)
-
-            if all_times:
-                # Find earliest start and latest end
-                earliest = min(all_times, key=lambda x: x[0])
-                latest = max(all_times, key=lambda x: x[1])
-
-                # Build merged time string
-                merged_time = f"{earliest[2]} {earliest[3]} - {latest[4]} {latest[5]}"
-
-                # Find the real location (not DL)
-                real_location = ""
-                real_location_info = None
-                for event in group:
-                    loc = event.get("location_code", "")
-                    if loc and loc != "DL":
-                        real_location = loc
-                        real_location_info = LOCATIONS.get(loc)
-                        break
-
-                # Use the first event as base and update it
-                merged_event = group[0].copy()
-                merged_event["time"] = merged_time
-                if real_location:
-                    merged_event["location_code"] = real_location
-                    merged_event["location_name"] = real_location_info["name"] if real_location_info else ""
-                    merged_event["location_address"] = real_location_info["address"] if real_location_info else ""
-
-                # Update title with merged time and real location
-                location_code = merged_event.get("location_code", "")
-                merged_event["title"] = f"{child} @{location_code} {merged_time}"
-
-                merged_events.append(merged_event)
-            else:
-                # Couldn't parse times, keep first event
-                merged_events.append(group[0])
-
-    return merged_events
-
-
-def extract_schedule_from_pdf(pdf_path: Path) -> list:
-    """
-    Extract schedule events from a swimming practice PDF.
-    Only extracts events for JUN2 (Nastya), JUN1 B (Kseniya), JUN1 R (Liza).
-    """
+    # Convert date-grouped format to flat event list
     events = []
+    for date_str, children in grouped_data.items():
+        for child_name, details in children.items():
+            location_code = details.get("location_code", "")
+            location_info = LOCATIONS.get(location_code)
+            time_str = details.get("time", "")
 
-    with pdfplumber.open(pdf_path) as pdf:
-        all_tables = []
+            title = f"{child_name} @{location_code} {time_str}"
 
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            if tables:
-                all_tables.extend(tables)
+            events.append({
+                "child": child_name,
+                "team": CHILD_TO_TEAM.get(child_name, ""),
+                "date": date_str,
+                "time": time_str,
+                "location_code": location_code,
+                "location_name": location_info["name"] if location_info else "",
+                "location_address": location_info["address"] if location_info else "",
+                "title": title,
+            })
 
-        if all_tables:
-            events = parse_swim_schedule_tables(all_tables)
-
-    # Merge events for same child on same date (e.g., DL + practice)
-    events = merge_same_day_events(events)
-
-    # Sort events by date and time
+    # Sort by date then child name
     def sort_key(event):
-        date_str = event.get("date", "")
-        time_str = event.get("time", "")
-
-        # Parse date
         try:
-            # Handle formats like "Feb 7, 2026" or "Jan 31, 2026"
-            parsed_date = datetime.strptime(date_str, "%b %d, %Y")
-        except:
+            parsed_date = datetime.strptime(event["date"], "%b %d, %Y")
+        except ValueError:
             parsed_date = datetime.max
-
-        # Parse start time from time string like "6:00 PM - 7:30 PM"
-        start_hour = 0
-        start_min = 0
-        try:
-            # Match pattern like "6:00 PM - 7:30 PM"
-            time_match = re.match(r'(\d{1,2}):(\d{2})\s*(AM|PM)', time_str.upper())
-            if time_match:
-                start_hour = int(time_match.group(1))
-                start_min = int(time_match.group(2))
-                ampm = time_match.group(3)
-
-                if ampm == "PM" and start_hour != 12:
-                    start_hour += 12
-                elif ampm == "AM" and start_hour == 12:
-                    start_hour = 0
-        except:
-            pass
-
-        return (parsed_date, start_hour, start_min)
+        return (parsed_date, event["child"])
 
     events.sort(key=sort_key)
-    return events
-
-
-def parse_schedule_line(line: str) -> Optional[dict]:
-    """
-    Parse a single schedule line like "JUN1 R 11-12:30P MICC" or "J U N 2 6 : 3 0 - 8 P M W"
-    Returns dict with child, team, time, location or None if not relevant.
-    """
-    if not line:
-        return None
-
-    original = line
-    original_upper = line.upper()
-
-    # Skip OFF entries
-    if "OFF" in original_upper:
-        return None
-
-    # Step 1: Remove ALL spaces to get a fully normalized string
-    compact = re.sub(r'\s+', '', original_upper)
-
-    # Step 2: Identify the team by looking for patterns
-    child = None
-    team = None
-    team_end_pos = 0
-
-    # Check for JUN1R or JUN1B first (more specific)
-    if "JUN1R" in compact:
-        child = "Liza"
-        team = "JUN1 R"
-        team_end_pos = compact.find("JUN1R") + 5
-    elif "JUN1B" in compact:
-        child = "Kseniya"
-        team = "JUN1 B"
-        team_end_pos = compact.find("JUN1B") + 5
-    elif "JUN2" in compact:
-        child = "Nastya"
-        team = "JUN2"
-        team_end_pos = compact.find("JUN2") + 4
-
-    if not child:
-        return None
-
-    # Step 3: Extract the rest after the team name
-    rest = compact[team_end_pos:]
-
-    # Step 4: Extract time - pattern like "6-7:30P" or "11-12:30PM" or "6:30-8PM"
-    # Format output with explicit AM/PM on BOTH start and end times
-    time_str = ""
-    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?-(\d{1,2})(?::(\d{2}))?([AP]M?)?', rest)
-    if time_match:
-        start_hour = time_match.group(1)
-        start_min = time_match.group(2) or "00"
-        end_hour = time_match.group(3)
-        end_min = time_match.group(4) or "00"
-        ampm = time_match.group(5) or ""
-        if ampm:
-            if len(ampm) == 1:
-                ampm = ampm + "M"
-        # Validate start hour (should be 1-12 for 12-hour time)
-        try:
-            sh = int(start_hour)
-            if sh >= 1 and sh <= 12 and ampm:
-                # Format with explicit AM/PM on both: "6:00 PM - 7:30 PM"
-                time_str = f"{start_hour}:{start_min} {ampm} - {end_hour}:{end_min} {ampm}"
-        except:
-            pass
-
-    # Step 5: Extract location from the rest
-    location_code = ""
-    location_info = None
-    # Check for DL in the entire compact string, not just rest (DL might be before team name)
-    is_dry_land = "DL" in compact
-
-    # Check in order of length (longer codes first to avoid partial matches)
-    for code in ["MICC", "MIBC", "MW", "PL"]:
-        if code in rest:
-            location_code = code
-            location_info = LOCATIONS.get(code)
-            break
-
-    # Skip entries without time
-    # Allow entries without location if it's DL (Dry Land) - will merge with practice later
-    if not time_str:
-        return None
-    if not location_code and not is_dry_land:
-        return None
-
-    # For DL entries, mark them but they'll get location from merged practice
-    if is_dry_land and not location_code:
-        location_code = "DL"
-
-    # Build the title: "Liza @MICC 6:00 PM - 7:30 PM"
-    title = f"{child} @{location_code} {time_str}"
-
-    return {
-        "child": child,
-        "team": team,
-        "time": time_str,
-        "location_code": location_code,
-        "location_name": location_info["name"] if location_info else "",
-        "location_address": location_info["address"] if location_info else "",
-        "title": title,
-    }
-
-
-def parse_swim_schedule_tables(tables: list) -> list:
-    """Parse swim schedule from extracted tables."""
-    events = []
-
-    # Month names for parsing
-    MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
-              "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"]
-    MONTH_ABBREV = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-    for table in tables:
-        if not table or len(table) < 3:
-            continue
-
-        # Extract the calendar month from the title (Row 0)
-        calendar_month = None
-        calendar_year = None
-        if table[0] and table[0][0]:
-            title = str(table[0][0]).upper()
-            for i, month in enumerate(MONTHS):
-                if month in title:
-                    calendar_month = i + 1  # 1-12
-                    break
-            # Extract year
-            year_match = re.search(r'20\d{2}', title)
-            if year_match:
-                calendar_year = int(year_match.group())
-
-        if not calendar_month:
-            calendar_month = 1  # Default to January
-        if not calendar_year:
-            calendar_year = 2026
-
-        # Find the row with day names (header row)
-        header_row_idx = -1
-        for row_idx, row in enumerate(table):
-            if row:
-                row_text = ' '.join(str(c) for c in row if c).lower()
-                if 'monday' in row_text or 'tuesday' in row_text:
-                    header_row_idx = row_idx
-                    break
-
-        if header_row_idx < 0:
-            continue
-
-        # Collect ALL date rows and their dates
-        # The calendar shows dates in multiple rows (each row is a week)
-        all_date_info = {}  # Maps (row_idx, col_idx) to date string
-
-        for row_idx in range(header_row_idx + 1, len(table)):
-            row = table[row_idx]
-            if not row:
-                continue
-
-            # Check if this row has date numbers (even rows typically have dates)
-            dates_in_row = []
-            for col_idx, cell in enumerate(row):
-                if cell:
-                    cell_str = str(cell).strip()
-                    if re.match(r'^\d{1,2}$', cell_str):
-                        date_num = int(cell_str)
-                        if 1 <= date_num <= 31:
-                            dates_in_row.append((col_idx, date_num))
-
-            if len(dates_in_row) >= 3:
-                # This is a date row
-                # We ONLY want dates from the calendar month (shown in title)
-                # Ignore any previous month dates that appear at start of calendar grid
-
-                # Get days in the calendar month
-                import calendar
-                days_in_month = calendar.monthrange(calendar_year, calendar_month)[1]
-
-                for col_idx, date_num in dates_in_row:
-                    # Only include dates that are valid for the calendar month
-                    # (1 to last day of month)
-                    if 1 <= date_num <= days_in_month:
-                        month_abbrev = MONTH_ABBREV[calendar_month - 1]
-                        date_str = f"{month_abbrev} {date_num}, {calendar_year}"
-
-                        # Store for both this row and the next row (data row)
-                        all_date_info[(row_idx, col_idx)] = date_str
-                        all_date_info[(row_idx + 1, col_idx)] = date_str
-                    # Dates outside the month range (e.g., 26-31 in February) are ignored
-
-        # Parse data rows (cells with team schedules)
-        for row_idx in range(header_row_idx + 1, len(table)):
-            row = table[row_idx]
-            if not row:
-                continue
-
-            for col_idx, cell in enumerate(row):
-                if not cell:
-                    continue
-
-                cell_str = str(cell).strip()
-                if not cell_str:
-                    continue
-
-                # Skip if this is just a date number
-                if re.match(r'^\d{1,2}$', cell_str):
-                    continue
-
-                # Each cell may contain multiple team schedules separated by newlines
-                lines = cell_str.split('\n')
-
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    # Parse this line
-                    parsed = parse_schedule_line(line)
-                    if parsed:
-                        # Add date - check current row and nearby columns
-                        date_str = all_date_info.get((row_idx, col_idx), "")
-                        if not date_str:
-                            # Try the row above (date row)
-                            date_str = all_date_info.get((row_idx - 1, col_idx), "")
-                        parsed["date"] = date_str
-                        events.append(parsed)
-
     return events
 
 
@@ -623,6 +318,28 @@ async def send_invites(request: Request):
             location_address = event.get("location_address", "")
             full_location = f"{location_name}, {location_address}" if location_name and location_address else location_name or location_address or ""
 
+            # Determine categories based on recipient/sender
+            # For ikhapova@outlook.com: use child name (Liza, Nastya, Ksyusha)
+            # For sergeykl@outlook.com: use location-based (Swimming - MW, etc.)
+            child_name = event.get("child", "")
+            location_code = event.get("location_code", "")
+
+            categories = []
+            if "ikhapova@outlook.com" in attendees:
+                # Use child name as category
+                if child_name == "Liza":
+                    categories = ["Liza"]
+                elif child_name == "Nastya":
+                    categories = ["Nastya"]
+                elif child_name == "Kseniya":
+                    categories = ["Ksyusha"]
+            else:
+                # Default: use location-based categories (for sergeykl@outlook.com)
+                if location_code in ["PL", "MICC", "MIBC", "MW"]:
+                    categories = [f"Swimming - {location_code}"]
+                else:
+                    categories = ["Swimming"]
+
             # Create calendar event
             calendar_event = {
                 "subject": event["title"],
@@ -644,6 +361,7 @@ async def send_invites(request: Request):
                     }
                     for email in attendees
                 ],
+                "categories": categories,
                 "isOnlineMeeting": False,
                 "body": {
                     "contentType": "HTML",
