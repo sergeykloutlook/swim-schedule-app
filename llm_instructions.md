@@ -27,7 +27,7 @@ Only extract events for these three teams. Ignore all other teams.
 5. Time format: "H:MM AM/PM - H:MM AM/PM" (e.g., "5:00 PM - 7:00 PM").
 6. If the PDF shows "11-12:30P", interpret as "11:00 AM - 12:30 PM".
 7. If the PDF shows "6:30-8P", interpret as "6:30 PM - 8:00 PM".
-8. After parsing is done and JSON is created you need to verify that everything is correct. Usual mistakes happens around parsing OFF (day offs), DL (dry lands), misses in PDF related to not specified AM or PM time. 
+8. After parsing is done and JSON is created you need to verify that everything is correct. Usual mistakes happens around parsing OFF (day offs), DL (dry lands), misses in PDF related to not specified AM or PM time. During verification you should go day by day for all swimmers and their corresponding groups and ensure everything is correct.
 9. Usually PDF file is for a given month, but it can contain few days of a previous monht. In such cases you should skip previous month. For example, in PDF for March it could be Feb 27, 28 or 29 included, you should skip those in your resulting file.
 10. You should never make up things by yourself. If there is OFF in PDF file you must not create a practice slot for it with made up times and locations.
 
