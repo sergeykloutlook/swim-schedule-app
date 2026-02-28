@@ -19,9 +19,30 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingOverlay = document.getElementById('loadingOverlay');
     const loadingText = document.getElementById('loadingText');
 
+    const testUxBtn = document.getElementById('testUxBtn');
+
     let selectedFile = null;
     let parsedEvents = [];
     let attendees = [];
+
+    // Test UX with synthetic data
+    testUxBtn.addEventListener('click', () => {
+        parsedEvents = [
+            { child: "Nastya", team: "JUN2", date: "Jan 5, 2026", time: "5:00 PM - 8:00 PM", location_code: "MW", location_name: "Mary Wayte Swimming Pool", location_address: "8815 SE 40th St, Mercer Island, WA 98040", title: "Nastya @MW 5:00 PM - 8:00 PM DL", dl: true },
+            { child: "Liza", team: "JUN1 R", date: "Jan 5, 2026", time: "5:00 PM - 6:30 PM", location_code: "MICC", location_name: "Mercer Island Country Club", location_address: "8700 SE 71st St, Mercer Island, WA 98040", title: "Liza @MICC 5:00 PM - 6:30 PM", dl: false },
+            { child: "Kseniya", team: "JUN1 B", date: "Jan 5, 2026", time: "6:00 PM - 7:30 PM", location_code: "MICC", location_name: "Mercer Island Country Club", location_address: "8700 SE 71st St, Mercer Island, WA 98040", title: "Kseniya @MICC 6:00 PM - 7:30 PM", dl: false },
+            { child: "Nastya", team: "JUN2", date: "Jan 6, 2026", time: "6:30 PM - 8:00 PM", location_code: "MW", location_name: "Mary Wayte Swimming Pool", location_address: "8815 SE 40th St, Mercer Island, WA 98040", title: "Nastya @MW 6:30 PM - 8:00 PM", dl: false },
+            { child: "Liza", team: "JUN1 R", date: "Jan 6, 2026", time: "11:00 AM - 12:30 PM", location_code: "MICC", location_name: "Mercer Island Country Club", location_address: "8700 SE 71st St, Mercer Island, WA 98040", title: "Liza @MICC 11:00 AM - 12:30 PM", dl: false },
+            { child: "Kseniya", team: "JUN1 B", date: "Jan 7, 2026", time: "6:00 PM - 7:30 PM", location_code: "PL", location_name: "Phantom Lake Bath & Tennis Club", location_address: "15810 SE 24th St, Bellevue, WA 98008", title: "Kseniya @PL 6:00 PM - 7:30 PM", dl: false },
+            { child: "Nastya", team: "JUN2", date: "Jan 7, 2026", time: "5:30 PM - 8:00 PM", location_code: "MW", location_name: "Mary Wayte Swimming Pool", location_address: "8815 SE 40th St, Mercer Island, WA 98040", title: "Nastya @MW 5:30 PM - 8:00 PM DL", dl: true },
+            { child: "Liza", team: "JUN1 R", date: "Jan 8, 2026", time: "5:00 PM - 6:30 PM", location_code: "MIBC", location_name: "Mercer Island Beach Club", location_address: "8326 Avalon Dr, Mercer Island, WA 98040", title: "Liza @MIBC 5:00 PM - 6:30 PM", dl: false },
+        ];
+        displayEvents(parsedEvents);
+        eventsSection.style.display = 'block';
+        attendeesSection.style.display = 'block';
+        sendSection.style.display = 'block';
+        eventsSection.scrollIntoView({ behavior: 'smooth' });
+    });
 
     // Upload area click
     uploadArea.addEventListener('click', () => pdfInput.click());
@@ -121,11 +142,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (e) { /* keep original */ }
 
+            // Summary of children for collapsed view
+            const childSummary = dateEvents.map(e => e.child).join(', ');
+
             html += `
-            <div class="date-group">
+            <div class="date-group expanded">
                 <div class="date-header">
-                    <span class="date-label">${escapeHtml(displayDate)}</span>
-                    <label class="date-toggle">
+                    <div class="date-header-left">
+                        <span class="date-chevron">&#9660;</span>
+                        <span class="date-label">${escapeHtml(displayDate)}</span>
+                        <span class="date-summary">${escapeHtml(childSummary)}</span>
+                    </div>
+                    <label class="date-toggle" onclick="event.stopPropagation()">
                         <input type="checkbox" class="date-select-all" checked>
                         <span>All</span>
                     </label>
@@ -139,17 +167,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 const locationFull = event.location_name && event.location_address
                     ? `${event.location_name}, ${event.location_address}`
                     : event.location_name || '';
+                const hasDL = event.dl || false;
 
                 html += `
-                    <div class="event-item" data-child="${escapeHtml(childName)}">
-                        <input type="checkbox" id="event-${event._index}" checked data-index="${event._index}">
-                        <div class="event-details">
-                            <div class="event-title">${escapeHtml(childName)}</div>
-                            <div class="event-meta">
-                                <span class="event-time-badge">${escapeHtml(timeStr)}</span>
-                                <span class="event-location-badge">@ ${escapeHtml(locationCode)}</span>
+                    <div class="event-card" data-child="${escapeHtml(childName)}">
+                        <div class="event-card-header">
+                            <input type="checkbox" id="event-${event._index}" checked data-index="${event._index}">
+                            <span class="event-child-name">${escapeHtml(childName)}</span>
+                            ${hasDL ? '<span class="event-dl-badge">DL</span>' : ''}
+                        </div>
+                        <div class="event-card-body">
+                            <div class="event-card-row">
+                                <span class="event-card-icon">&#128339;</span>
+                                <span>${escapeHtml(timeStr)}</span>
                             </div>
-                            ${locationFull ? `<div class="event-location-full">${escapeHtml(locationFull)}</div>` : ''}
+                            <div class="event-card-row">
+                                <span class="event-card-icon">&#128205;</span>
+                                <span>${escapeHtml(locationCode)}${locationFull ? ' — ' + escapeHtml(locationFull) : ''}</span>
+                            </div>
                         </div>
                     </div>`;
             }
@@ -161,11 +196,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         eventsList.innerHTML = html;
 
-        // Wire up per-date "All" toggles
+        // Wire up collapsible date headers and toggles
         document.querySelectorAll('.date-group').forEach(group => {
+            const header = group.querySelector('.date-header');
             const toggle = group.querySelector('.date-select-all');
-            const checkboxes = group.querySelectorAll('.event-item input[type="checkbox"]');
+            const checkboxes = group.querySelectorAll('.event-card input[type="checkbox"]');
 
+            // Click header to expand/collapse
+            header.addEventListener('click', () => {
+                group.classList.toggle('expanded');
+                group.classList.toggle('collapsed');
+            });
+
+            // "All" checkbox toggle
             toggle.addEventListener('change', () => {
                 checkboxes.forEach(cb => cb.checked = toggle.checked);
             });
@@ -234,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Send invites
     sendBtn.addEventListener('click', async () => {
         const selectedEvents = [];
-        document.querySelectorAll('#eventsList input[type="checkbox"]:checked').forEach(cb => {
+        document.querySelectorAll('#eventsList .event-card input[type="checkbox"]:checked').forEach(cb => {
             const index = parseInt(cb.dataset.index);
             selectedEvents.push(parsedEvents[index]);
         });

@@ -219,8 +219,11 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
             location_code = details.get("location_code", "")
             location_info = LOCATIONS.get(location_code)
             time_str = details.get("time", "")
+            has_dl = details.get("dl", False)
 
             title = f"{child_name} @{location_code} {time_str}"
+            if has_dl:
+                title += " DL"
 
             events.append({
                 "child": child_name,
@@ -231,6 +234,7 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> list:
                 "location_name": location_info["name"] if location_info else "",
                 "location_address": location_info["address"] if location_info else "",
                 "title": title,
+                "dl": has_dl,
             })
 
     # Sort by date then child name

@@ -17,12 +17,15 @@ Only extract events for these three teams. Ignore all other teams.
 
 ## Rules
 1. Skip any day marked "OFF" — no event for that day.
-2. If a team has both DL (Dry Land) and regular practice on the same day, merge them into ONE event using the earliest start time and the latest end time. Use the real pool location (not DL).
+2. If a team has both DL (Dry Land) and regular practice on the same day, merge them into ONE event using the earliest start time and the latest end time. Use the real pool location (not DL). Usually DL goes after the location of the practice and then goes time of DL. You need to figure out earliest start time between DL and practice time and latest end date between those. Then use those time for an event in this day. When you have DL - add DL at the end of the title in the invite to indicate that swimmer had dry land this day.
 3. Each event must have explicit AM/PM on both the start and end time.
 4. Date format: "Mon DD, YYYY" (e.g., "Jan 5, 2026").
 5. Time format: "H:MM AM/PM - H:MM AM/PM" (e.g., "5:00 PM - 7:00 PM").
 6. If the PDF shows "11-12:30P", interpret as "11:00 AM - 12:30 PM".
 7. If the PDF shows "6:30-8P", interpret as "6:30 PM - 8:00 PM".
+8. After parsing is done and JSON is created you need to verify that everything is correct. Usual mistakes happens around parsing OFF (day offs), DL (dry lands), misses in PDF related to not specified AM or PM time. 
+9. Usually PDF file is for a given month, but it can contain few days of a previous monht. In such cases you should skip previous month. For example, in PDF for March it could be Feb 27, 28 or 29 included, you should skip those in your resulting file.
+
 
 ## Output Format
 Return ONLY valid JSON, no other text. Group by date, with children nested inside:
@@ -31,18 +34,21 @@ Return ONLY valid JSON, no other text. Group by date, with children nested insid
 {
   "Jan 5, 2026": {
     "Nastya": {
-      "time": "6:30 PM - 8:00 PM",
-      "location_code": "MW"
+      "time": "5:00 PM - 8:00 PM",
+      "location_code": "MW",
+      "dl": true
     },
     "Liza": {
       "time": "5:00 PM - 6:30 PM",
-      "location_code": "MICC"
+      "location_code": "MICC",
+      "dl": false
     }
   },
   "Jan 6, 2026": {
     "Kseniya": {
       "time": "6:00 PM - 7:30 PM",
-      "location_code": "MICC"
+      "location_code": "MICC",
+      "dl": false
     }
   }
 }
