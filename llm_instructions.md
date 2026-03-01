@@ -20,16 +20,18 @@ Only extract events for these three teams. Ignore all other teams.
 - DL means Dry Land which is usually before practice
 
 ## Rules
-1. Skip any day marked OFF — no event for that day.
-2. If a team has both DL (Dry Land) and regular practice on the same day, merge them into ONE event using the earliest start time and the latest end time. Use the real pool location (not DL). Usually DL goes after the location of the practice and then goes time of DL. You need to figure out earliest start time between DL and practice time and latest end date between those. Then use those time for an event in this day. When you have DL - add DL at the end of the title in the invite to indicate that swimmer had dry land this day.
-3. Each event must have explicit AM/PM on both the start and end time.
-4. Date format: "Mon DD, YYYY" (e.g., "Jan 5, 2026").
-5. Time format: "H:MM AM/PM - H:MM AM/PM" (e.g., "5:00 PM - 7:00 PM").
-6. If the PDF shows "11-12:30P", interpret as "11:00 AM - 12:30 PM".
-7. If the PDF shows "6:30-8P", interpret as "6:30 PM - 8:00 PM".
-8. After parsing is done and JSON is created you need to verify that everything is correct. Usual mistakes happens around parsing OFF (day offs), DL (dry lands), misses in PDF related to not specified AM or PM time. During verification you should go day by day for all swimmers and their corresponding groups and ensure everything is correct.
-9. Usually PDF file is for a given month, but it can contain few days of a previous monht. In such cases you should skip previous month. For example, in PDF for March it could be Feb 27, 28 or 29 included, you should skip those in your resulting file.
-10. You should never make up things by yourself. If there is OFF in PDF file you must not create a practice slot for it with made up times and locations.
+- Skip any day marked OFF — no event for that day.
+- If a team has both DL (Dry Land) and regular practice on the same day, merge them into ONE event using the earliest start time and the latest end time. Use the real pool location (not DL). Usually DL goes after the location of the practice and then goes time of DL. You need to figure out earliest start time between DL and practice time and latest end date between those. Then use those time for an event in this day. When you have DL - add DL at the end of the title in the invite to indicate that swimmer had dry land this day.
+- Each event must have explicit AM/PM on both the start and end time.
+- Date format: "Mon DD, YYYY" (e.g., "Jan 5, 2026").
+- Time format: "H:MM AM/PM - H:MM AM/PM" (e.g., "5:00 PM - 7:00 PM").
+- If the PDF shows "11-12:30P", interpret as "11:00 AM - 12:30 PM".
+- If the PDF shows "6:30-8P", interpret as "6:30 PM - 8:00 PM".
+- After parsing is done and JSON is created you need to verify that everything is correct. Usual mistakes happens around parsing OFF (day offs), DL (dry lands), misses in PDF related to not specified AM or PM time. During verification you should go day by day for all swimmers and their corresponding groups and ensure everything is correct.
+- If the PDF shows JUN2 OFF - it means this day there is not practice for JUN2 group. Same applies for all other groups.
+- If the PDF shows JUN2 6:30-8P MW DL 6-6:30P - it means that invite needs to be from 6PM to 8PM and DL must be in the invite title.
+- Usually PDF file is for a given month, but it can contain few days of a previous monht. In such cases you should skip previous month. For example, in PDF for March it could be Feb 27, 28 or 29 included, you should skip those in your resulting file.
+- You should never make up things by yourself. If there is OFF in PDF file you must not create a practice slot for it with made up times and locations.
 
 
 ## Output Format

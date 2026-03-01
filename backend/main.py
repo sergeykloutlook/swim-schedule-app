@@ -172,7 +172,8 @@ def call_llm_for_schedule(pdf_b64: str, llm_prompt: str, model: str) -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=16384,
+        system="You are a JSON-only API. Output ONLY valid JSON with no explanatory text, no markdown code fences, no preamble, and no commentary. Start your response with { and end with }.",
         messages=[
             {
                 "role": "user",
@@ -190,14 +191,31 @@ def call_llm_for_schedule(pdf_b64: str, llm_prompt: str, model: str) -> dict:
                         "text": llm_prompt,
                     },
                 ],
-            }
+            },
         ],
     )
 
-    response_text = message.content[0].text.strip()
-    if response_text.startswith("```"):
-        response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
-        response_text = re.sub(r'\s*```$', '', response_text)
+    # Handle multiple content blocks (some models return thinking + text)
+    response_text = ""
+    for block in message.content:
+        if block.type == "text":
+            response_text = block.text.strip()
+            break
+
+    if not response_text:
+        raise ValueError(f"Model {model} returned empty response")
+
+    print(f"[{model}] Response length: {len(response_text)}, stop_reason: {message.stop_reason}")
+
+    # Extract JSON from response - handle code fences and surrounding text
+    code_fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
+    if code_fence_match:
+        response_text = code_fence_match.group(1)
+    else:
+        # Try to find raw JSON object
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            response_text = json_match.group(0)
 
     return json.loads(response_text)
 
@@ -321,6 +339,7 @@ def parse_pdf_with_llm(pdf_bytes: bytes) -> tuple:
             sonnet_data = sonnet_future.result()
         except Exception as e:
             sonnet_error = str(e)
+            print(f"Sonnet verification error: {type(e).__name__}: {e}")
 
     events = enrich_grouped_to_events(opus_data)
 
